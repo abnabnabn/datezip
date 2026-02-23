@@ -1,123 +1,130 @@
 # datezip
 
-`datezip` is a portable Bash utility designed for automated, recursive directory backups. It bridges the gap between simple "copy-paste" backups and complex enterprise solutions by providing native `.gitignore` support, intelligent incremental logic, targeted restorations, and a robust retention policy.
+`datezip` is a portable Bash utility designed for automated, recursive directory backups. It bridges the gap between simple "copy-paste" backups and complex enterprise solutions by providing native `.gitignore` support, intelligent incremental logic, targeted restorations, history tracking, and a robust retention policy.
 
 ## Features
 
 * **Git-Aware Traversal**: Automatically detects Git repositories and offers to operate from the project root.
-* **Hierarchical Exclusions**: Recursively discovers and respects all `.gitignore` files within the directory tree, even if the directory is not a formal Git repository.
-* **Daily Incremental Logic**: Defaults to a `FULL` backup for the first run of the day and `INC` (incremental) for subsequent runs, capturing only files modified since the last backup.
+* **Hierarchical Exclusions**: Recursively discovers and respects all `.gitignore` files within the directory tree.
+* **Daily Incremental Logic**: Defaults to a `FULL` backup for the first run of the day and `INC` (incremental) for subsequent runs.
+* **Forensic History**: Search and trace the lifecycle of specific files across your entire retention window using `--history`.
+* **Self-Healing Cache**: A Just-In-Time (JIT) history cache that automatically syncs with the disk state (detecting manual deletions or backfills).
 * **Chain Restoration**: Intelligently reconstructs project state by finding the preceding `FULL` backup and applying subsequent increments in sequence.
 * **Granular Recovery**: Restore specific files from an archive rather than extracting the entire backup tree.
-* **Automation-Friendly**: Supports fully non-interactive operations, quiet mode execution, and precise timestamp targeting for CI/CD or cron integrations.
-* **Retention Management**: Automated cleanup based on a "whichever is greater" policy for backup count and age.
+* **Automation-Friendly**: Supports non-interactive operations, quiet mode, and precise timestamp targeting.
 
-## Architecture
+## Command Line Reference
 
-### Backup Workflow
+### Core Operations
+| Parameter | Description |
+| :--- | :--- |
+| `--backup` | Explicitly triggers a backup. This is the default action if no primary action is specified. |
+| `--full` | Forces a `FULL` backup, ignoring the daily rotation logic. |
+| `--inc` | Forces an incremental (`INC`) backup. |
+| `--cleanup` | Prunes old backups based on retention settings (`--keep-full`, `--keep-days`). |
 
-```mermaid
-graph TD
-    A[Start datezip] --> B{Action?}
-    B -->|Backup| C[Resolve Target Directory]
-    C --> D[Identify Latest Backup]
-    D --> E{Daily Status?}
-    E -->|First Today| F[Set Mode: FULL]
-    E -->|Subsequent| G[Set Mode: INC]
-    F --> H[Scan .gitignore Patterns]
-    G --> H
-    H --> I[Execute Zip]
-    I --> J[End]
-```
+### Inspection & History
+| Parameter | Description |
+| :--- | :--- |
+| `--list` | Lists all available backup ZIPs in the `backups/` folder with their index and timestamp. |
+| `--history` | Shows the file modification history. Groups by backup by default. |
+| `--reindex` | Triggers a full rebuild of the `.datezip_history` cache by scanning all ZIP files. |
 
-### Restoration Chain
+### Filtering & Windowing
+| Parameter | Description |
+| :--- | :--- |
+| `--files LIST` | A comma-separated list of filenames. Used to filter history or target specific files during restoration. |
+| `--from TS` | Filter history starting at timestamp `YYYYMMDD_HHMMSS`. |
+| `--to TS` | Filter history ending at timestamp `YYYYMMDD_HHMMSS`. |
 
-```mermaid
-graph LR
-    subgraph BackupStorage["Backup Storage"]
-        F1[Full_01]
-        I1[Inc_01]
-        I2[Inc_02]
-        F2[Full_02]
-        I3[Inc_03]
-    end
-    
-    UserSelect((Select I3)) --> Logic{Mode?}
-    Logic -->|Just this| I3
-    Logic -->|Everything| F2 --> I3
-```
+### Restoration
+| Parameter | Description |
+| :--- | :--- |
+| `--restore` | Enters the interactive restoration menu. |
+| `--restore-index N` | Non-interactively restores the backup archive at index `N`. |
+| `--restore-time TS` | Non-interactively restores the state at or immediately prior to timestamp `TS`. |
+| `--restore-type e\|j` | `e` (Everything): Restore the full chain (Full + Incs). `j` (Just): Restore only the selected archive. |
 
-## Requirements
+### Configuration & Global
+| Parameter | Description |
+| :--- | :--- |
+| `-q`, `--quiet` | Suppresses all informational output. Errors are still sent to `stderr`. |
+| `--local` | Skips Git root detection; operates strictly on the current working directory. |
+| `--git-root` | Forces operation from the detected Git project root. |
+| `--keep-full N` | Retain `N` full backups during cleanup (Default: 10). |
+| `--keep-days N` | Retain backups for `N` days during cleanup (Default: 14). |
 
-* **Bash**: 3.2+ (Natively compatible with macOS and standard Linux distributions)
-* **Zip/Unzip**: Standard compression utilities
-* **Find & Sort**: POSIX compliant utilities for file discovery and chronological sorting
+## Common Use Cases
 
-## Installation
+### 1. Point-in-Time Recovery
+**Scenario:** You modified several files an hour ago and realized you made a mistake. You want to revert the whole directory to the state it was in at 2 PM today.
 
-An installation script is provided to verify system dependencies and install the utility globally.
+1. Find the timestamp in the history:
+   ```bash
+   datezip --history --from 20240216_130000 --to 20240216_150000
+   ```
+2. Restore the state:
+   ```bash
+   datezip --restore-time 20240216_140000
+   ```
+
+### 2. Recovering a Deleted File
+**Scenario:** A configuration file was deleted yesterday. You need to get it back without overwriting your current work.
+
+1. Trace the history of the file:
+   ```bash
+   datezip --history --files config/settings.json
+   ```
+2. Restore just that file from the latest available version:
+   ```bash
+   datezip --restore-time 20240215_180000 --files config/settings.json
+   ```
+
+### 3. Auditing Changes to a Sensitive File
+**Scenario:** You want to see every time `auth.php` was changed in the last 7 days to investigate a security concern.
 
 ```bash
-# Ensure the install script is executable
-chmod +x install.sh
+datezip --history --files auth.php --from 20240209_000000
+```
+*The output will show every backup containing a change to that file, marked with `.` for updates and `+` for its first appearance.*
 
-# Run the installer (requires sudo for /usr/bin access)
-./install.sh
+### 4. Automated Daily Backups (Cron)
+**Scenario:** You want the project to back up silently every hour and clean up old files at midnight.
+
+Add this to your `crontab -e`:
+```cron
+# Backup every hour
+0 * * * * /usr/local/bin/datezip --quiet
+
+# Cleanup once a day at midnight
+0 0 * * * /usr/local/bin/datezip --cleanup --quiet
 ```
 
-## Usage
+### 5. Manual Repository Re-Indexing
+**Scenario:** You manually moved several old `datezip_*.zip` files from another machine into your `backups/` folder and want them to show up in the history.
 
-### Basic Commands
-
-| **Command** | **Description** | 
-| ----- | ----- | 
-| `datezip` | Performs a backup (Full if first of the day, otherwise Incremental) | 
-| `datezip --full` | Forces a full backup regardless of date | 
-| `datezip --list` | Lists all available backups and their corresponding indices | 
-| `datezip --restore` | Starts interactive restoration mode | 
-| `datezip --cleanup` | Removes obsolete increments and prunes old full backups | 
-| `datezip -q` | Quiet mode; suppresses informational output (ideal for cron) | 
-
-### Advanced & Non-Interactive Options
-
-* `--local`: Skips Git root detection and operates strictly on the current working directory.
-* `--git-root`: Forces the script to operate from the Git project root.
-* `--keep-full N`: Number of full backups to keep (Default: 10).
-* `--keep-days N`: Number of days to retain backups (Default: 14).
-* `--restore-index N`: Non-interactively restores the backup at the specified index.
-* `--restore-time TS`: Non-interactively restores to the state at or immediately prior to timestamp `YYYYMMDD_HHMMSS`.
-* `--restore-type e|j`: When restoring an increment, specify whether to restore (e)verything in the chain or (j)ust the increment.
-* `--files LIST`: A comma-separated list of specific files to extract from the targeted backup.
-
-## Configuration
-
-When running inside a Git repository, `datezip` saves your preference (Root vs. Subdir) in a hidden `.datezip` file at the project root.
-
+```bash
+datezip --reindex
 ```
-# .datezip content example
-root
-```
+*The JIT cache logic will detect the new files, but `--reindex` ensures the chronological order and New/Updated statuses are perfectly recalculated.*
 
 ## How It Works
 
-### File Filtering
+### JIT History Caching
+To avoid overhead during routine backups, `datezip` uses a **Just-In-Time (JIT)** history cache (`backups/.datezip_history`).
+- The cache is only updated when you query `--history`.
+- It uses the `comm` utility to compare the timestamps on disk vs. the timestamps in the cache.
+- **Deletions**: If a ZIP is missing from disk, the cache is rebuilt.
+- **Additions**: New ZIPs are appended to the cache instantly using `unzip -Z1` and `awk`.
 
-The script performs a recursive search for all `.gitignore` files. It translates Git-style patterns into `zip` exclusion arguments.
-
-1. Patterns starting with `/` are anchored to the specific directory containing that `.gitignore`.
-2. Other patterns match globally within that subdirectory.
-3. Internal defaults always exclude `.git/`, `backups/`, and `.datezip`.
-
-### Incremental Logic
-
-Incremental backups are identified by the `_INC.zip` suffix. The script uses the `find -newer` command against the most recent backup file to identify changed assets, ensuring high performance without needing a file-hash database.
+### Restoration Chain Overlay
+When restoring a specific time, `datezip` identifies the `FULL` backup that started the chain and every `INC` (incremental) backup leading to your target. It extracts files from these archives sequentially. This "overlay" approach ensures that even if a file wasn't changed in the very last increment, you get the version that was most recently captured.
 
 ### Cleanup Logic
-
-The cleanup process follows two rules:
-
-1. **Orphan Removal**: Deletes any `INC` backup that is chronologically older than the latest `FULL` backup (since they are redundant for current state restoration).
-2. **Retention Policy**: Keeps the most recent N full backups **OR** all full backups within the last M days, whichever resulting set is larger.
+`datezip --cleanup` maintains your storage by:
+1. Deleting all incremental backups (`INC`) that are older than the most recent `FULL` backup.
+2. Enforcing the retention policy: keeps the last 10 full backups **or** all backups from the last 14 days (whichever results in more backups).
+3. Automatically triggering a history reindex if any files are deleted to ensure the audit trail remains accurate.
 
 ## License
 
