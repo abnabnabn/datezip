@@ -13,6 +13,7 @@ RESTORE_INDEX=""
 RESTORE_TIME=""
 RESTORE_TYPE=""
 RESTORE_FILES=""
+RESTORE_DEST="."
 ACTION_LIST=false
 ACTION_CLEANUP=false
 ACTION_HISTORY=false
@@ -60,6 +61,7 @@ Options:
   --restore-index N    Non-interactive: restore backup at index N
   --restore-time TS    Non-interactive: restore to timestamp (YYYYMMDD_HHMMSS)
   --restore-type e|j   Non-interactive: (e)verything or (j)ust increment
+  --dest PATH          Destination directory for restore (default: .)
   --files LIST         Comma-separated list of files to filter/restore
   --history            Show chronological file history
   --from TS            Filter history start (format: YYYYMMDD_HHMMSS)
@@ -86,6 +88,7 @@ parse_args() {
             --restore-index) RESTORE_INDEX="$2"; shift ;;
             --restore-time) RESTORE_TIME="$2"; shift ;;
             --restore-type) RESTORE_TYPE="$2"; shift ;;
+            --dest) RESTORE_DEST="$2"; shift ;;
             --files) RESTORE_FILES="$2"; shift ;;
             --history) ACTION_HISTORY=true ;;
             --reindex) ACTION_REINDEX=true ;;
@@ -189,7 +192,6 @@ update_history_cache() {
         return 0
     fi
 
-    # Condition 1: Deletions (cache contains a timestamp not present on disk)
     local missing_from_disk=$(comm -13 <(echo "$actual_ts_list") <(echo "$cached_ts_list") | sed '/^$/d')
     if [[ -n "$missing_from_disk" ]]; then
         log "Notice: Orphaned history detected (archives were deleted). Reindexing..."
@@ -197,7 +199,6 @@ update_history_cache() {
         return 0
     fi
 
-    # Condition 2: New additions (disk contains a timestamp not present in cache)
     local missing_from_cache=$(comm -23 <(echo "$actual_ts_list") <(echo "$cached_ts_list") | sed '/^$/d')
     if [[ -n "$missing_from_cache" ]]; then
         local latest_cached=$(echo "$cached_ts_list" | tail -n 1)
@@ -219,10 +220,7 @@ update_history_cache() {
             log "Updating history cache with ${#new_zips[@]} new backup(s)..."
             for zip in "${new_zips[@]}"; do
                 local ts=$(basename "$zip" | cut -d'_' -f2,3)
-                
-                # Emit a marker line so comm always finds the TS, even if the archive had 0 modifications
                 echo "${ts}|*|00000000.000000|__MARKER__"
-                
                 unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
                 match($0, /[0-9]{8}\.[0-9]{6}/) {
                     mtime = substr($0, RSTART, RLENGTH)
@@ -244,15 +242,12 @@ update_history_cache() {
             }
             {
                 zts = substr($0, 1, 15)
-                # Pass through markers directly
                 if (substr($0, 17, 1) == "*") {
                     print $0 >> cache
                     next
                 }
-                
                 mtime = substr($0, 17, 15)
                 file = substr($0, 33)
-                
                 if (!(file in seen)) {
                     printf "%s|+|%s|%s\n", zts, mtime, file >> cache
                     seen[file] = mtime
@@ -282,7 +277,6 @@ execute_reindex() {
     for zip in "${sorted[@]}"; do
         local ts=$(basename "$zip" | cut -d'_' -f2,3)
         echo "${ts}|*|00000000.000000|__MARKER__"
-        
         unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
         match($0, /[0-9]{8}\.[0-9]{6}/) {
             mtime = substr($0, RSTART, RLENGTH)
@@ -299,10 +293,8 @@ execute_reindex() {
             print $0
             next
         }
-        
         mtime = substr($0, 17, 15)
         file = substr($0, 33)
-        
         if (!(file in seen)) {
             printf "%s|+|%s|%s\n", zts, mtime, file
             seen[file] = mtime
@@ -320,11 +312,8 @@ execute_history() {
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available."; return 0; }
     
     local tmp_cache=$(mktemp)
-    
-    # Apply Temporal Windowing & Strip out Markers
     while IFS= read -r line; do
         [[ "${line:16:1}" == "*" ]] && continue
-        
         local ts="${line:0:15}"
         [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
         [[ -n "$HISTORY_TO" && "$ts" > "$HISTORY_TO" ]] && continue
@@ -342,7 +331,6 @@ execute_history() {
     rm -f "$tmp_cache"
 
     if [[ -n "$RESTORE_FILES" ]]; then
-        # View Route B: File-Specific History View
         IFS=',' read -ra target_files <<< "$RESTORE_FILES"
         for target in "${target_files[@]}"; do
             echo "---- $target ------"
@@ -355,7 +343,6 @@ execute_history() {
             echo ""
         done
     else
-        # View Route A: Detailed Stat View (Default)
         local current_ts=""
         while IFS= read -r line; do
             local ts="${line:0:15}"
@@ -372,7 +359,6 @@ execute_history() {
         done < "$sorted_cache"
         echo ""
     fi
-    
     echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
     rm -f "$sorted_cache"
 }
@@ -445,7 +431,6 @@ execute_restore() {
     if [[ -n "$RESTORE_TIME" ]]; then
         for ((i=${#sorted[@]}-1; i>=0; i--)); do
             local b_ts=$(basename "${sorted[$i]}" | cut -d'_' -f2,3)
-            # Find the exact match, or the closest prior archive
             if [[ "$b_ts" < "$RESTORE_TIME" || "$b_ts" == "$RESTORE_TIME" ]]; then choice=$i; break; fi
         done
         [[ -z "$choice" ]] && { echo "Error: No backup before $RESTORE_TIME" >&2; exit 1; }
@@ -467,7 +452,8 @@ execute_restore() {
         read -r -p "Restore [E]verything or [J]ust increment? (e/j): " mode
     fi
     
-    log "Restoring..."
+    mkdir -p "$RESTORE_DEST"
+    log "Restoring to $RESTORE_DEST..."
     if [[ "$mode" =~ ^[Ee]$ ]]; then
         local start_idx=0
         for ((i=choice; i>=0; i--)); do [[ "${sorted[$i]}" == *"_FULL.zip" ]] && { start_idx=$i; break; }; done
@@ -475,8 +461,7 @@ execute_restore() {
             log "Extracting $(basename "${sorted[$i]}")"
             local cmd=("unzip" "-o" "-q" "${sorted[$i]}")
             [[ ${#target_files[@]} -gt 0 ]] && cmd+=("${target_files[@]}")
-            cmd+=("-d" ".")
-            
+            cmd+=("-d" "$RESTORE_DEST")
             if [[ ${#target_files[@]} -gt 0 ]]; then
                 "${cmd[@]}" >/dev/null 2>&1 || true
             else
@@ -486,8 +471,7 @@ execute_restore() {
     else
         local cmd=("unzip" "-o" "-q" "$selected")
         [[ ${#target_files[@]} -gt 0 ]] && cmd+=("${target_files[@]}")
-        cmd+=("-d" ".")
-        
+        cmd+=("-d" "$RESTORE_DEST")
         if [[ ${#target_files[@]} -gt 0 ]]; then
             "${cmd[@]}" >/dev/null 2>&1 || true
         else
@@ -504,11 +488,9 @@ execute_cleanup() {
     local fulls=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
     local incs=("$BACKUP_DIR_NAME"/datezip_*_INC.zip)
     shopt -u nullglob
-    
     local s_full=()
     while IFS= read -r line; do s_full+=("$line"); done < <(printf "%s\n" "${fulls[@]}" | sort)
     local num_f=${#s_full[@]}
-    
     if [[ $num_f -gt 0 ]]; then
         local latest="${s_full[$((num_f - 1))]}"
         for inc in "${incs[@]}"; do 
@@ -518,7 +500,6 @@ execute_cleanup() {
             fi
         done
     fi
-    
     local cutoff=$(( num_f - KEEP_FULL ))
     if [[ $cutoff -gt 0 ]]; then
         for (( i=0; i<cutoff; i++ )); do
@@ -534,7 +515,6 @@ execute_cleanup() {
 main() {
     check_dependencies && parse_args "$@" && resolve_target_directory
     cd "$TARGET_DIR" || exit 1
-    
     if [[ "$ACTION_REINDEX" == true ]]; then execute_reindex
     elif [[ "$ACTION_HISTORY" == true ]]; then execute_history
     elif [[ "$ACTION_LIST" == true ]]; then execute_list
@@ -546,5 +526,4 @@ main() {
         [[ "$ACTION_CLEANUP" == true ]] && execute_cleanup
     fi
 }
-
 main "$@"
