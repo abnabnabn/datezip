@@ -109,8 +109,8 @@ graph TD
     B -->|Backup| C[Resolve Target Directory]
     C --> D[Identify Latest Backup]
     D --> E{Daily Status?}
-    E -->|First Today| F[Set Mode: FULL]
-    E -->|Subsequent| G[Set Mode: INC]
+    E -->| "First Today" | F[Set Mode: FULL]
+    E -->| "Subsequent" | G[Set Mode: INC]
     F --> H[Scan .gitignore Patterns]
     G --> H
     H --> I[Execute Zip]
@@ -127,9 +127,9 @@ To avoid read/write overhead during routine backups, `datezip` manages a **Just-
 ```mermaid
 graph TD
     H1[User: datezip --history] --> H2{Compare Disk vs Cache}
-    H2 -->|comm -13 (Deletions)| H3[Trigger Full Reindex]
-    H2 -->|comm -23 (New Archives)| H4[JIT Append via awk]
-    H2 -->|Match| H5[Filter & Display]
+    H2 -->| "comm -13 (Deletions)" | H3[Trigger Full Reindex]
+    H2 -->| "comm -23 (New Archives)" | H4[JIT Append via awk]
+    H2 -->| "Match" | H5[Filter & Display]
 ```
 - The cache is strictly evaluated and updated *only* when the `--history` command is invoked.
 - It uses the POSIX `comm` utility to perform a highly efficient set-difference analysis between the `YYYYMMDD_HHMMSS` timestamps currently on disk and those indexed in the cache.
@@ -144,7 +144,7 @@ graph LR
         F1[Full_01] --> I1[Inc_01] --> I2[Inc_02]
     end
     
-    UserSelect((Restore: Inc_02)) --> Engine[Extraction Engine]
+    UserSelect(("Restore: Inc_02")) --> Engine[Extraction Engine]
     F1 --> Engine
     I1 --> Engine
     I2 --> Engine
