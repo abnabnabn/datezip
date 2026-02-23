@@ -17,7 +17,16 @@ datezip --full
 datezip --inc
 ```
 
-### Auditing and Forensic Search
+### Restoring Backups
+Restoration commands allow you to pluck specific versions of files from the past.
+```bash
+# Restore a specific version of a file found in history
+datezip --restore-time 20240215_180000 --files src/app.js
+
+# Restore the entire directory to a previous state
+datezip --restore-time 20240214_080000
+
+### Seeing History
 Use `--history` as the base command, then refine with sub-parameters.
 ```bash
 # See everything
@@ -30,14 +39,17 @@ datezip --history --files config.json,settings.yml
 datezip --history --from 20240216_090000 --to 20240216_120000
 ```
 
-### Targeted Restoration
-Restoration commands allow you to pluck specific versions of files from the past.
+### Viewing History
+Use `--history` as the base command, then refine with sub-parameters.
 ```bash
-# Restore a specific version of a file found in history
-datezip --restore-time 20240215_180000 --files src/app.js
+# See everything
+datezip --history
 
-# Restore the entire directory to a previous state
-datezip --restore-time 20240214_080000
+# Trace the lifecycle of specific configuration files
+datezip --history --files config.json,settings.yml
+
+# Check what happened during a specific window
+datezip --history --from 20240216_090000 --to 20240216_120000
 ```
 
 ### Maintenance and Automation
@@ -51,7 +63,7 @@ datezip --quiet && datezip --cleanup --quiet
 
 The CLI is organized into primary actions and their associated modifiers (sub-commands).
 
-### 1. Backup Operations
+### 1. Backup
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
 | `datezip` | Action | Triggers a backup. Default action if no other is specified. |
@@ -62,7 +74,16 @@ The CLI is organized into primary actions and their associated modifiers (sub-co
 | `--keep-full N` | Modifier | (Sub-command of cleanup) Set number of full backups to retain. |
 | `--keep-days N` | Modifier | (Sub-command of cleanup) Set days of history to retain. |
 
-### 2. History & Inspection
+### 2. Restoring
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `--restore` | Action | Enters interactive restoration menu. |
+| `--restore-time TS`| Action | Targeted restoration to a specific timestamp. |
+| `--restore-index N`| Action | Restoration based on archive index `N`. |
+| `--files LIST` | Modifier | (Sub-command of restore) Extract only specific files. |
+| `--restore-type e\|j`| Modifier | (Sub-command of restore) `e` (Everything/Chain) or `j` (Just index). |
+
+### 3. History
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
 | `--history` | Action | Displays chronological file history. |
@@ -71,15 +92,6 @@ The CLI is organized into primary actions and their associated modifiers (sub-co
 | `--to TS` | Modifier | (Sub-command of history) Filter end time (`YYYYMMDD_HHMMSS`). |
 | `--list` | Action | Lists available backup archives and their indices. |
 | `--reindex` | Action | Force-rebuilds the history cache from disk archives. |
-
-### 3. Restoration
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--restore` | Action | Enters interactive restoration menu. |
-| `--restore-time TS`| Action | Targeted restoration to a specific timestamp. |
-| `--restore-index N`| Action | Restoration based on archive index `N`. |
-| `--files LIST` | Modifier | (Sub-command of restore) Extract only specific files. |
-| `--restore-type e\|j`| Modifier | (Sub-command of restore) `e` (Everything/Chain) or `j` (Just index). |
 
 ### 4. Global Modifiers
 | Parameter | Description |
@@ -109,8 +121,8 @@ graph TD
     B -->|Backup| C[Resolve Target Directory]
     C --> D[Identify Latest Backup]
     D --> E{Daily Status?}
-    E -->| "First Today" | F[Set Mode: FULL]
-    E -->| "Subsequent" | G[Set Mode: INC]
+    E -->|First Today| F[Set Mode: FULL]
+    E -->|Subsequent| G[Set Mode: INC]
     F --> H[Scan .gitignore Patterns]
     G --> H
     H --> I[Execute Zip]
@@ -127,9 +139,9 @@ To avoid read/write overhead during routine backups, `datezip` manages a **Just-
 ```mermaid
 graph TD
     H1[User: datezip --history] --> H2{Compare Disk vs Cache}
-    H2 -->| "comm -13 (Deletions)" | H3[Trigger Full Reindex]
-    H2 -->| "comm -23 (New Archives)" | H4[JIT Append via awk]
-    H2 -->| "Match" | H5[Filter & Display]
+    H2 -->|Deletions| H3[Trigger Full Reindex]
+    H2 -->|New Archives| H4[JIT Append via awk]
+    H2 -->|Match| H5[Filter & Display]
 ```
 - The cache is strictly evaluated and updated *only* when the `--history` command is invoked.
 - It uses the POSIX `comm` utility to perform a highly efficient set-difference analysis between the `YYYYMMDD_HHMMSS` timestamps currently on disk and those indexed in the cache.
