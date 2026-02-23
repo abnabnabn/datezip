@@ -181,16 +181,15 @@ update_history_cache() {
         return 0
     fi
 
-    # Extract unique timestamps from disk and cache. Using sort -u guarantees comm compatibility.
-    local actual_ts_list=$(printf "%s\n" "${backups[@]}" | awk -F'_' '{print $2"_"$3}' | sort -u)
-    local cached_ts_list=$(awk '{print $1}' "$HISTORY_CACHE_FILE" | sort -u)
+    local actual_ts_list=$(printf "%s\n" "${backups[@]}" | awk -F'_' '{print $2"_"$3}' | awk -F'.' '{print $1}' | sort -u)
+    local cached_ts_list=$(awk -F'|' '{print $1}' "$HISTORY_CACHE_FILE" | sort -u)
 
     if [[ -z "$cached_ts_list" ]]; then
         execute_reindex
         return 0
     fi
 
-    # Condition 1: Deletion detection (cache contains a timestamp not present on disk)
+    # Condition 1: Deletions (cache contains a timestamp not present on disk)
     local missing_from_disk=$(comm -13 <(echo "$actual_ts_list") <(echo "$cached_ts_list") | sed '/^$/d')
     if [[ -n "$missing_from_disk" ]]; then
         log "Notice: Orphaned history detected (archives were deleted). Reindexing..."
@@ -204,14 +203,12 @@ update_history_cache() {
         local latest_cached=$(echo "$cached_ts_list" | tail -n 1)
         local oldest_new=$(echo "$missing_from_cache" | head -n 1)
 
-        # Reindex entirely if a manually backfilled archive breaks chronological assumptions
         if [[ "$oldest_new" < "$latest_cached" ]]; then
             log "Notice: Out-of-order archives detected. Reindexing..."
             execute_reindex
             return 0
         fi
 
-        # JIT append for strict forward progression
         local new_zips=()
         for ts in $missing_from_cache; do
             local zip_match=("$BACKUP_DIR_NAME"/datezip_${ts}_*.zip)
@@ -222,23 +219,46 @@ update_history_cache() {
             log "Updating history cache with ${#new_zips[@]} new backup(s)..."
             for zip in "${new_zips[@]}"; do
                 local ts=$(basename "$zip" | cut -d'_' -f2,3)
-                unzip -Z1 "$zip" 2>/dev/null | grep -v "/$" | sed "s/^/$ts|/"
-            done | awk -v cache="$HISTORY_CACHE_FILE" -F'|' '
+                
+                # Emit a marker line so comm always finds the TS, even if the archive had 0 modifications
+                echo "${ts}|*|00000000.000000|__MARKER__"
+                
+                unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
+                match($0, /[0-9]{8}\.[0-9]{6}/) {
+                    mtime = substr($0, RSTART, RLENGTH)
+                    rest = substr($0, RSTART + RLENGTH)
+                    sub(/^ +/, "", rest)
+                    file = rest
+                    if (file ~ /\/$/) next
+                    printf "%s|%s|%s\n", zts, mtime, file
+                }'
+            done | awk -v cache="$HISTORY_CACHE_FILE" '
             BEGIN {
                 while ((getline line < cache) > 0) {
-                    file = substr(line, 21)
-                    seen[file] = 1
+                    if (substr(line, 17, 1) == "*") continue
+                    file = substr(line, 35)
+                    mtime = substr(line, 19, 15)
+                    seen[file] = mtime
                 }
                 close(cache)
             }
             {
-                ts = $1
-                file = substr($0, length(ts) + 2)
+                zts = substr($0, 1, 15)
+                # Pass through markers directly
+                if (substr($0, 17, 1) == "*") {
+                    print $0 >> cache
+                    next
+                }
+                
+                mtime = substr($0, 17, 15)
+                file = substr($0, 33)
+                
                 if (!(file in seen)) {
-                    printf "%s  +  %s\n", ts, file >> cache
-                    seen[file] = 1
-                } else {
-                    printf "%s  .  %s\n", ts, file >> cache
+                    printf "%s|+|%s|%s\n", zts, mtime, file >> cache
+                    seen[file] = mtime
+                } else if (seen[file] != mtime) {
+                    printf "%s|.|%s|%s\n", zts, mtime, file >> cache
+                    seen[file] = mtime
                 }
             }'
         fi
@@ -260,17 +280,35 @@ execute_reindex() {
     while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
     
     for zip in "${sorted[@]}"; do
-        local zip_name=$(basename "$zip")
-        local ts=$(echo "$zip_name" | cut -d'_' -f2,3)
-        unzip -Z1 "$zip" 2>/dev/null | grep -v "/$" | sed "s/^/$ts|/"
-    done | awk -F'|' '{
-        ts = $1
-        file = substr($0, length(ts) + 2)
+        local ts=$(basename "$zip" | cut -d'_' -f2,3)
+        echo "${ts}|*|00000000.000000|__MARKER__"
+        
+        unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
+        match($0, /[0-9]{8}\.[0-9]{6}/) {
+            mtime = substr($0, RSTART, RLENGTH)
+            rest = substr($0, RSTART + RLENGTH)
+            sub(/^ +/, "", rest)
+            file = rest
+            if (file ~ /\/$/) next
+            printf "%s|%s|%s\n", zts, mtime, file
+        }'
+    done | awk '
+    {
+        zts = substr($0, 1, 15)
+        if (substr($0, 17, 1) == "*") {
+            print $0
+            next
+        }
+        
+        mtime = substr($0, 17, 15)
+        file = substr($0, 33)
+        
         if (!(file in seen)) {
-            printf "%s  +  %s\n", ts, file
-            seen[file] = 1
-        } else {
-            printf "%s  .  %s\n", ts, file
+            printf "%s|+|%s|%s\n", zts, mtime, file
+            seen[file] = mtime
+        } else if (seen[file] != mtime) {
+            printf "%s|.|%s|%s\n", zts, mtime, file
+            seen[file] = mtime
         }
     }' > "$HISTORY_CACHE_FILE"
     
@@ -283,8 +321,10 @@ execute_history() {
     
     local tmp_cache=$(mktemp)
     
-    # Apply Temporal Windowing
+    # Apply Temporal Windowing & Strip out Markers
     while IFS= read -r line; do
+        [[ "${line:16:1}" == "*" ]] && continue
+        
         local ts="${line:0:15}"
         [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
         [[ -n "$HISTORY_TO" && "$ts" > "$HISTORY_TO" ]] && continue
@@ -307,9 +347,9 @@ execute_history() {
         for target in "${target_files[@]}"; do
             echo "---- $target ------"
             while IFS= read -r line; do
-                local f_name="${line:20}"
+                local f_name="${line:34}"
                 if [[ "$f_name" == "$target" ]]; then
-                    echo "$line"
+                    echo "${line:0:15}  ${line:16:1}  ${line:34}"
                 fi
             done < "$sorted_cache"
             echo ""
@@ -328,7 +368,7 @@ execute_history() {
                 echo "---- ${ts} (${b_type}) --------"
                 current_ts="$ts"
             fi
-            echo "$line"
+            echo "${line:0:15}  ${line:16:1}  ${line:34}"
         done < "$sorted_cache"
         echo ""
     fi
@@ -437,8 +477,6 @@ execute_restore() {
             [[ ${#target_files[@]} -gt 0 ]] && cmd+=("${target_files[@]}")
             cmd+=("-d" ".")
             
-            # Silence stderr if files are targeted, preventing expected "filename not matched" spam
-            # from intermediate increments that don't contain the specific file being restored.
             if [[ ${#target_files[@]} -gt 0 ]]; then
                 "${cmd[@]}" >/dev/null 2>&1 || true
             else
