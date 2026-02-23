@@ -2,11 +2,10 @@
 
 # --- Configuration ---
 SOURCE_FILE="datezip.sh"
-TARGET_PATH="/usr/bin/datezip"
+TARGET_PATH="/usr/local/bin/datezip"
 DEPENDENCIES=("zip" "unzip" "find" "sort")
 
 # --- Functions ---
-
 log() {
     printf "%b\n" "$1"
 }
@@ -37,6 +36,11 @@ fi
 
 # 3. Perform installation
 log "Installing $SOURCE_FILE to $TARGET_PATH..."
+
+# Ensure the target directory exists (relevant for some minimal Linux installs)
+if [[ ! -d "/usr/local/bin" ]]; then
+    sudo mkdir -p /usr/local/bin
+fi
 
 # Use -f to force overwrite without prompting
 if sudo cp -f "$SOURCE_FILE" "$TARGET_PATH"; then
