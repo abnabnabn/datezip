@@ -152,16 +152,38 @@ get_zip_excludes() {
         local rel_dir=$(dirname "${ignore_file#./}")
         [[ "$rel_dir" == "." ]] && rel_dir=""
         while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"
             [[ "$line" =~ ^#.*$ ]] || [[ -z "$line" ]] && continue
+            
             local pattern="${line%/}"
+            local is_anchored=false
+            [[ "$pattern" == */* ]] && is_anchored=true
+            
+            local anchored_pattern="${pattern#/}"
+            
+            add_variants() {
+                local p="$1"
+                excludes+=("$p" "$p/*")
+            }
+
             if [[ -n "$rel_dir" ]]; then
-                [[ "$pattern" == /* ]] && excludes+=("${rel_dir}${pattern}") || excludes+=("${rel_dir}/${pattern}" "${rel_dir}/**/${pattern}")
+                if [[ "$is_anchored" == true ]]; then
+                    add_variants "${rel_dir}/${anchored_pattern}"
+                else
+                    add_variants "${rel_dir}/${anchored_pattern}"
+                    add_variants "${rel_dir}/*/${anchored_pattern}"
+                fi
             else
-                [[ "$pattern" == /* ]] && excludes+=("${pattern#/}") || excludes+=("$pattern" "**/$pattern")
+                if [[ "$is_anchored" == true ]]; then
+                    add_variants "${anchored_pattern}"
+                else
+                    add_variants "${anchored_pattern}"
+                    add_variants "*/${anchored_pattern}"
+                fi
             fi
         done < "$ignore_file"
     done < <(find . -name ".gitignore" -print0)
-    for ex in "${excludes[@]}"; do echo "$ex"; done | sort -u
+    for ex in "${excludes[@]}"; do printf "%s\n" "$ex"; done | sort -u
 }
 
 get_latest_backup() {
