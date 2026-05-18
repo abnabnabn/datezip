@@ -2,6 +2,27 @@
 
 `datezip` is a portable Bash utility designed for automated, recursive directory backups. It bridges the gap between simple "copy-paste" backups and complex enterprise solutions by providing native `.gitignore` support, intelligent incremental logic, targeted restorations, history tracking, and a robust retention policy.
 
+## Installation
+
+You can install `datezip` using the provided `install.sh` script.
+
+### Standard Installation
+Installs `datezip` to `/usr/local/bin` (requires sudo):
+```bash
+sudo ./install.sh --default
+```
+
+To install to a custom directory:
+```bash
+./install.sh ~/.local/bin
+```
+
+### Developer Installation (Symlink)
+If you are developing or making changes to `datezip.sh`, you can install it as a symbolic link. This allows your changes to be immediately available without re-installing:
+```bash
+./install.sh --symlink ~/.local/bin
+```
+
 ## Common Use Cases
 
 ### Performing Backups

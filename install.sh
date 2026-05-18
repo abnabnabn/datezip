@@ -18,13 +18,18 @@ error_exit() {
 
 show_usage() {
     cat << EOF
-Usage: $(basename "$0") <target_directory> | --default
+Usage: $(basename "$0") [options] <target_directory>
+       $(basename "$0") [options] --default
 
-Installs the datezip utility to the specified location.
+Installs the datezip utility.
+
+Options:
+  -s, --symlink       Install as a symlink to the current directory (for developers)
+  --default           Installs to the default location ($DEFAULT_DIR)
+  -h, --help          Show this help message
 
 Arguments:
   <target_directory>  The directory to install the binary to (e.g., ~/.local/bin)
-  --default           Installs to the default location ($DEFAULT_DIR)
 EOF
     exit 1
 }
@@ -40,13 +45,27 @@ check_dependencies() {
 
 # --- Main Execution ---
 
-if [[ -z "$1" ]]; then
-    show_usage
-fi
+USE_SYMLINK=false
+TARGET_DIR=""
 
-TARGET_DIR="$1"
-if [[ "$TARGET_DIR" == "--default" ]]; then
-    TARGET_DIR="$DEFAULT_DIR"
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --default) TARGET_DIR="$DEFAULT_DIR" ;;
+        --symlink|-s) USE_SYMLINK=true ;;
+        -h|--help) show_usage ;;
+        *) 
+            if [[ -z "$TARGET_DIR" ]]; then
+                TARGET_DIR="$1"
+            else
+                error_exit "Unknown argument: $1"
+            fi
+            ;;
+    esac
+    shift
+done
+
+if [[ -z "$TARGET_DIR" ]]; then
+    show_usage
 fi
 
 TARGET_PATH="$TARGET_DIR/datezip"
@@ -73,17 +92,34 @@ elif [[ ! -d "$TARGET_DIR" ]]; then
 fi
 
 # 4. Perform installation
-log "Installing $SOURCE_FILE to $TARGET_PATH..."
+if [[ "$USE_SYMLINK" == true ]]; then
+    log "Installing $SOURCE_FILE as symlink to $TARGET_PATH..."
+else
+    log "Installing $SOURCE_FILE to $TARGET_PATH..."
+fi
 
 # Ensure the target directory exists
 if [[ ! -d "$TARGET_DIR" ]]; then
     $SUDO_CMD mkdir -p "$TARGET_DIR" || error_exit "Failed to create directory $TARGET_DIR"
 fi
 
-# Use -f to force overwrite without prompting
-if $SUDO_CMD cp -f "$SOURCE_FILE" "$TARGET_PATH"; then
-    $SUDO_CMD chmod +x "$TARGET_PATH"
-    
+INSTALL_SUCCESS=false
+if [[ "$USE_SYMLINK" == true ]]; then
+    # Use absolute path for symlink to ensure it remains valid
+    ABS_SOURCE="$(pwd)/$SOURCE_FILE"
+    chmod +x "$SOURCE_FILE"
+    if $SUDO_CMD ln -sf "$ABS_SOURCE" "$TARGET_PATH"; then
+        INSTALL_SUCCESS=true
+    fi
+else
+    # Use -f to force overwrite without prompting
+    if $SUDO_CMD cp -f "$SOURCE_FILE" "$TARGET_PATH"; then
+        $SUDO_CMD chmod +x "$TARGET_PATH"
+        INSTALL_SUCCESS=true
+    fi
+fi
+
+if [[ "$INSTALL_SUCCESS" == true ]]; then
     # 5. Clean up legacy path if it exists
     if [[ -f "$LEGACY_PATH" ]]; then
         log "Removing legacy binary at $LEGACY_PATH..."
@@ -103,5 +139,9 @@ if $SUDO_CMD cp -f "$SOURCE_FILE" "$TARGET_PATH"; then
         log "You may need to add it to your ~/.bashrc or ~/.zshrc file."
     fi
 else
-    error_exit "Failed to copy file to $TARGET_PATH. Check permissions."
+    if [[ "$USE_SYMLINK" == true ]]; then
+        error_exit "Failed to create symlink at $TARGET_PATH. Check permissions."
+    else
+        error_exit "Failed to copy file to $TARGET_PATH. Check permissions."
+    fi
 fi
