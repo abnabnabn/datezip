@@ -15,11 +15,13 @@ RESTORE_TYPE=""
 RESTORE_FILES=""
 RESTORE_DEST="."
 ACTION_LIST=false
+ACTION_STATUS=false
 ACTION_CLEANUP=false
 ACTION_HISTORY=false
 ACTION_REINDEX=false
 HISTORY_FROM=""
 HISTORY_TO=""
+HISTORY_LIMIT=""
 EXPLICIT_BACKUP=false
 FORCE_GIT_ROOT=false
 FORCE_LOCAL=false
@@ -60,14 +62,16 @@ Options:
   --restore            Enter interactive restore mode
   --restore-index N    Non-interactive: restore backup at index N
   --restore-time TS    Non-interactive: restore to timestamp (YYYYMMDD_HHMMSS)
-  --restore-type e|j   Non-interactive: (e)verything or (j)ust increment
+  --restore-type e|j   Non-interactive: (e)verything/chain or (j)ust the specific index
   --dest PATH          Destination directory for restore (default: .)
   --files LIST         Comma-separated list of files to filter/restore
   --history            Show chronological file history
+  --limit N            Limit history output to N most recent entries
   --from TS            Filter history start (format: YYYYMMDD_HHMMSS)
   --to TS              Filter history end (format: YYYYMMDD_HHMMSS)
   --reindex            Rebuild the history cache from existing ZIP archives
   --list               List available backups and their indices
+  --status             Show changes since the last backup
   --cleanup            Prune old backups
   --keep-full N        Number of full backups to keep (default: 10)
   --keep-days N        Number of days to retain full backups (default: 14)
@@ -91,6 +95,10 @@ parse_args() {
             --dest) RESTORE_DEST="$2"; shift ;;
             --files) RESTORE_FILES="$2"; shift ;;
             --history) ACTION_HISTORY=true ;;
+            --limit)
+                HISTORY_LIMIT="$2"; shift
+                [[ ! "$HISTORY_LIMIT" =~ ^[0-9]+$ ]] && { echo "Error: --limit requires a positive integer" >&2; exit 1; }
+                ;;
             --reindex) ACTION_REINDEX=true ;;
             --from) 
                 HISTORY_FROM="$2"; shift 
@@ -101,6 +109,7 @@ parse_args() {
                 [[ ! "$HISTORY_TO" =~ ^[0-9]{8}_[0-9]{6}$ ]] && { echo "Error: --to requires YYYYMMDD_HHMMSS format" >&2; exit 1; }
                 ;;
             --list) ACTION_LIST=true ;;
+            --status) ACTION_STATUS=true ;;
             --cleanup) ACTION_CLEANUP=true ;;
             --keep-full) KEEP_FULL="$2"; shift ;;
             --keep-days) KEEP_DAYS="$2"; shift ;;
@@ -144,45 +153,84 @@ resolve_target_directory() {
         fi
     fi
     [[ "$use_root" == "root" ]] && TARGET_DIR="$git_root"
+    return 0
 }
 
 get_zip_excludes() {
     local excludes=("$BACKUP_DIR_NAME/*" "$CONFIG_FILE_NAME" ".git/*" "*/.git/*")
-    while IFS= read -r -d '' ignore_file; do
-        local rel_dir=$(dirname "${ignore_file#./}")
-        [[ "$rel_dir" == "." ]] && rel_dir=""
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            line="${line%$'\r'}"
-            [[ "$line" =~ ^#.*$ ]] || [[ -z "$line" ]] && continue
-            
-            local pattern="${line%/}"
-            local is_anchored=false
-            [[ "$pattern" == */* ]] && is_anchored=true
-            
-            local anchored_pattern="${pattern#/}"
-            
-            add_variants() {
-                local p="$1"
-                excludes+=("$p" "$p/*")
-            }
-
-            if [[ -n "$rel_dir" ]]; then
-                if [[ "$is_anchored" == true ]]; then
-                    add_variants "${rel_dir}/${anchored_pattern}"
+    
+    # Gold Standard: Use git if available for 100% accuracy
+    if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        # Use git status to find all ignored files and directories
+        # git status --ignored --porcelain=v1 prefix is '!! ' (3 chars) for ignored items
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^"!!" ]]; then
+                local path="${line:3}"
+                [[ -z "$path" ]] && continue
+                # Remove quotes if git added them (happens for special chars)
+                path="${path#\"}"
+                path="${path%\"}"
+                if [[ "$path" == */ ]]; then
+                    excludes+=("${path}*")
                 else
-                    add_variants "${rel_dir}/${anchored_pattern}"
-                    add_variants "${rel_dir}/*/${anchored_pattern}"
-                fi
-            else
-                if [[ "$is_anchored" == true ]]; then
-                    add_variants "${anchored_pattern}"
-                else
-                    add_variants "${anchored_pattern}"
-                    add_variants "*/${anchored_pattern}"
+                    excludes+=("$path" "${path}/*")
                 fi
             fi
-        done < "$ignore_file"
-    done < <(find . -name ".gitignore" -print0)
+        done < <(git status --ignored --porcelain=v1)
+    else
+        # Fallback: Manual parsing of all discoverable .gitignore files
+        # ONLY if we are not in a git repo (where git status is superior)
+        while IFS= read -r -d '' ignore_file; do
+            local rel_dir=$(dirname "${ignore_file#./}")
+            [[ "$rel_dir" == "." ]] && rel_dir=""
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                line="${line%$'\r'}"
+                # Skip comments and empty lines
+                [[ "$line" =~ ^#.*$ ]] || [[ -z "$line" ]] && continue
+                
+                # Basic support for negation: we can't easily "un-exclude" in zip -x,
+                # so we just skip negation lines in the manual parser.
+                # (The git-based logic above handles negation perfectly).
+                [[ "$line" =~ ^! ]] && continue 
+                
+                # Handle escaped characters (very basic support for \# and \!)
+                line="${line//\\#/ #}"
+                line="${line//\\!/!}"
+                
+                local pattern="${line%/}"
+                
+                # Standardize double-star to single-star for zip compatibility
+                pattern="${pattern//\*\*\//}"
+                pattern="${pattern//\/\*\*/}"
+                
+                local is_anchored=false
+                [[ "$line" == */ ]] && is_anchored=true
+                [[ "$pattern" == /* ]] && { is_anchored=true; pattern="${pattern#/}"; }
+                [[ "$pattern" == */* ]] && is_anchored=true
+                
+                add_variants() {
+                    local p="$1"
+                    excludes+=("$p" "$p/*")
+                }
+
+                if [[ -n "$rel_dir" ]]; then
+                    if [[ "$is_anchored" == true ]]; then
+                        add_variants "${rel_dir}/${pattern}"
+                    else
+                        add_variants "${rel_dir}/${pattern}"
+                        add_variants "${rel_dir}/*/${pattern}"
+                    fi
+                else
+                    if [[ "$is_anchored" == true ]]; then
+                        add_variants "${pattern}"
+                    else
+                        add_variants "${pattern}"
+                        add_variants "*/${pattern}"
+                    fi
+                fi
+            done < "$ignore_file"
+        done < <(find . -name ".gitignore" -print0)
+    fi
     for ex in "${excludes[@]}"; do printf "%s\n" "$ex"; done | sort -u
 }
 
@@ -248,33 +296,28 @@ update_history_cache() {
                     mtime = substr($0, RSTART, RLENGTH)
                     rest = substr($0, RSTART + RLENGTH)
                     sub(/^ +/, "", rest)
-                    file = rest
-                    if (file ~ /\/$/) next
-                    printf "%s|%s|%s\n", zts, mtime, file
+                    if (rest ~ /\/$/) next
+                    printf "%s||%s|%s\n", zts, mtime, rest
                 }'
-            done | awk -v cache="$HISTORY_CACHE_FILE" '
+            done | awk -F'|' -v OFS='|' -v cache="$HISTORY_CACHE_FILE" '
             BEGIN {
-                while ((getline line < cache) > 0) {
-                    if (substr(line, 17, 1) == "*") continue
-                    file = substr(line, 35)
-                    mtime = substr(line, 19, 15)
-                    seen[file] = mtime
+                while ((getline < cache) > 0) {
+                    if ($2 == "*") continue
+                    seen[$4] = $3
                 }
                 close(cache)
             }
             {
-                zts = substr($0, 1, 15)
-                if (substr($0, 17, 1) == "*") {
+                if ($2 == "*") {
                     print $0 >> cache
                     next
                 }
-                mtime = substr($0, 17, 15)
-                file = substr($0, 33)
+                zts = $1; mtime = $3; file = $4
                 if (!(file in seen)) {
-                    printf "%s|+|%s|%s\n", zts, mtime, file >> cache
+                    print zts, "+", mtime, file >> cache
                     seen[file] = mtime
                 } else if (seen[file] != mtime) {
-                    printf "%s|.|%s|%s\n", zts, mtime, file >> cache
+                    print zts, ".", mtime, file >> cache
                     seen[file] = mtime
                 }
             }'
@@ -304,24 +347,21 @@ execute_reindex() {
             mtime = substr($0, RSTART, RLENGTH)
             rest = substr($0, RSTART + RLENGTH)
             sub(/^ +/, "", rest)
-            file = rest
-            if (file ~ /\/$/) next
-            printf "%s|%s|%s\n", zts, mtime, file
+            if (rest ~ /\/$/) next
+            printf "%s||%s|%s\n", zts, mtime, rest
         }'
-    done | awk '
+    done | awk -F'|' -v OFS='|' '
     {
-        zts = substr($0, 1, 15)
-        if (substr($0, 17, 1) == "*") {
+        if ($2 == "*") {
             print $0
             next
         }
-        mtime = substr($0, 17, 15)
-        file = substr($0, 33)
+        zts = $1; mtime = $3; file = $4
         if (!(file in seen)) {
-            printf "%s|+|%s|%s\n", zts, mtime, file
+            print zts, "+", mtime, file
             seen[file] = mtime
         } else if (seen[file] != mtime) {
-            printf "%s|.|%s|%s\n", zts, mtime, file
+            print zts, ".", mtime, file
             seen[file] = mtime
         }
     }' > "$HISTORY_CACHE_FILE"
@@ -334,12 +374,11 @@ execute_history() {
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available."; return 0; }
     
     local tmp_cache=$(mktemp)
-    while IFS= read -r line; do
-        [[ "${line:16:1}" == "*" ]] && continue
-        local ts="${line:0:15}"
+    while IFS='|' read -r ts status mtime f_name; do
+        [[ "$status" == "*" ]] && continue
         [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
         [[ -n "$HISTORY_TO" && "$ts" > "$HISTORY_TO" ]] && continue
-        echo "$line" >> "$tmp_cache"
+        echo "${ts}|${status}|${mtime}|${f_name}" >> "$tmp_cache"
     done < "$HISTORY_CACHE_FILE"
     
     if [[ ! -s "$tmp_cache" ]]; then
@@ -349,40 +388,123 @@ execute_history() {
     fi
 
     local sorted_cache=$(mktemp)
-    sort -r -k1,1 "$tmp_cache" > "$sorted_cache"
+    sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
     rm -f "$tmp_cache"
+
+    if [[ -n "$HISTORY_LIMIT" ]]; then
+        local limited_cache=$(mktemp)
+        head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
+        rm -f "$sorted_cache"
+        sorted_cache="$limited_cache"
+    fi
 
     if [[ -n "$RESTORE_FILES" ]]; then
         IFS=',' read -ra target_files <<< "$RESTORE_FILES"
         for target in "${target_files[@]}"; do
             echo "---- $target ------"
-            while IFS= read -r line; do
-                local f_name="${line:34}"
+            while IFS='|' read -r ts status mtime f_name; do
                 if [[ "$f_name" == "$target" ]]; then
-                    echo "${line:0:15}  ${line:16:1}  ${line:34}"
+                    echo "${ts}  ${status}  ${f_name}"
                 fi
             done < "$sorted_cache"
             echo ""
         done
     else
         local current_ts=""
-        while IFS= read -r line; do
-            local ts="${line:0:15}"
+        while IFS='|' read -r ts status mtime f_name; do
             if [[ "$ts" != "$current_ts" ]]; then
                 [[ -n "$current_ts" ]] && echo ""
                 local b_type="INC"
-                if ls "$BACKUP_DIR_NAME"/datezip_${ts}_FULL.zip >/dev/null 2>&1; then
+                if ls "$BACKUP_DIR_NAME"/datezip_${ts}_*.zip 2>/dev/null | grep -q "_FULL.zip"; then
                     b_type="FULL"
                 fi
                 echo "---- ${ts} (${b_type}) --------"
                 current_ts="$ts"
             fi
-            echo "${line:0:15}  ${line:16:1}  ${line:34}"
+            echo "${ts}  ${status}  ${f_name}"
         done < "$sorted_cache"
         echo ""
     fi
     echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
     rm -f "$sorted_cache"
+}
+
+execute_status() {
+    update_history_cache
+    [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available. Run a backup first."; return 0; }
+    
+    # Delta from Baseline Model: Find the latest FULL backup timestamp
+    # We grep for _FULL.zip in the backup directory and extract the timestamp
+    local latest_full_ts=$(ls "$BACKUP_DIR_NAME"/datezip_*_FULL.zip 2>/dev/null | tail -n 1 | cut -d'_' -f2,3 | cut -d'.' -f1)
+    
+    if [[ -z "$latest_full_ts" ]]; then
+        # Fallback to the very first entry if no FULL found (shouldn't happen)
+        latest_full_ts=$(head -n 1 "$HISTORY_CACHE_FILE" | cut -d'|' -f1)
+    fi
+    
+    log "Comparing against latest FULL backup: $latest_full_ts"
+    
+    local tmp_latest=$(mktemp)
+    # Reconstruct state exactly as it was at that FULL backup by scanning history
+    awk -F'|' -v target="$latest_full_ts" '
+    $1 <= target {
+        if ($2 == "*") next
+        state[$4] = $2
+        mtime[$4] = $3
+    }
+    END {
+        for (f in state) {
+            if (state[f] != "-") print f "|" mtime[f]
+        }
+    }' "$HISTORY_CACHE_FILE" | sort > "$tmp_latest"
+    
+    local tmp_disk=$(mktemp)
+    
+    # Gold Standard: Use git if available for 100% accuracy on what should be tracked
+    if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git ls-files --cached --others --exclude-standard | sort > "$tmp_disk"
+    else
+        # Fallback: Use find and filter out standard excludes
+        find . -type f \
+            -not -path "*/.git/*" \
+            -not -path "./$BACKUP_DIR_NAME/*" \
+            | sed 's|^\./||' | sort > "$tmp_disk"
+    fi
+    
+    echo "Changes since FULL backup ($latest_full_ts):"
+    
+    # Deleted: In FULL backup but not on disk
+    local deleted=$(comm -23 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
+    if [[ -n "$deleted" ]]; then
+        echo "Deleted:"
+        sed 's/^/  - /' <<< "$deleted"
+    fi
+    
+    # Untracked: On disk but not in FULL backup
+    local untracked=$(comm -13 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
+    if [[ -n "$untracked" ]]; then
+        echo "Untracked:"
+        sed 's/^/  ? /' <<< "$untracked"
+    fi
+    
+    # Modified: In both, check mtime
+    local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
+    if [[ -n "$common" ]]; then
+        local first_modified=true
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            # Get latest mtime from cache - anchored to start of line
+            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
+            # Get current mtime
+            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null)
+            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
+                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
+                echo "  . $f"
+            fi
+        done <<< "$common"
+    fi
+    
+    rm -f "$tmp_latest" "$tmp_disk"
 }
 
 execute_backup() {
@@ -403,16 +525,13 @@ execute_backup() {
     local status=0
     
     if [[ "$b_type" == "INC" && -n "$last_backup" ]]; then
-        local manifest_file=$(mktemp)
-        find . -type f -newer "$last_backup" > "$manifest_file"
-        if [[ ! -s "$manifest_file" ]]; then
+        if [[ -z $(find . -type f -newer "$last_backup" -print -quit 2>/dev/null) ]]; then
             log "No changes detected."
-            rm -f "$exclude_file" "$manifest_file"
+            rm -f "$exclude_file"
             return
         fi
-        zip "$dest_path" -@ -x@"${exclude_file}" -q < "$manifest_file"
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
         status=$?
-        rm -f "$manifest_file"
     else
         zip -r "$dest_path" . -x@"${exclude_file}" -q
         status=$?
@@ -523,10 +642,15 @@ execute_cleanup() {
         done
     fi
     local cutoff=$(( num_f - KEEP_FULL ))
+    local cutoff_date=$(date -v-"${KEEP_DAYS}"d +"%Y%m%d_%H%M%S" 2>/dev/null || date -d "-${KEEP_DAYS} days" +"%Y%m%d_%H%M%S" 2>/dev/null)
     if [[ $cutoff -gt 0 ]]; then
         for (( i=0; i<cutoff; i++ )); do
             local f="${s_full[$i]}"
-            if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]]; then 
+            local f_ts
+            f_ts=$(basename "$f" | cut -d'_' -f2,3)
+            # Prune ONLY if it's outside the KEEP_FULL window AND outside the KEEP_DAYS window
+            # This implements the "whichever rule yields the larger retention set" logic.
+            if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
                 log "Deleting: $(basename "$f")"
                 rm -f "$f"
             fi
@@ -540,6 +664,7 @@ main() {
     if [[ "$ACTION_REINDEX" == true ]]; then execute_reindex
     elif [[ "$ACTION_HISTORY" == true ]]; then execute_history
     elif [[ "$ACTION_LIST" == true ]]; then execute_list
+    elif [[ "$ACTION_STATUS" == true ]]; then execute_status
     elif [[ -n "$RESTORE_INDEX" || -n "$RESTORE_TIME" || "$RESTORE_MODE" == true ]]; then execute_restore
     else
         local run_b=true
@@ -547,5 +672,6 @@ main() {
         [[ "$run_b" == true ]] && execute_backup
         [[ "$ACTION_CLEANUP" == true ]] && execute_cleanup
     fi
+    return 0
 }
 main "$@"

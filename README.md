@@ -25,6 +25,7 @@ datezip --restore-time 20240215_180000 --files src/app.js
 
 # Restore the entire directory to a previous state
 datezip --restore-time 20240214_080000
+```
 
 ### Seeing History
 Use `--history` as the base command, then refine with sub-parameters.
@@ -39,17 +40,11 @@ datezip --history --files config.json,settings.yml
 datezip --history --from 20240216_090000 --to 20240216_120000
 ```
 
-### Viewing History
-Use `--history` as the base command, then refine with sub-parameters.
+### Checking Status
+The status command provides a Git-like overview of changes since the last major milestone (FULL backup).
 ```bash
-# See everything
-datezip --history
-
-# Trace the lifecycle of specific configuration files
-datezip --history --files config.json,settings.yml
-
-# Check what happened during a specific window
-datezip --history --from 20240216_090000 --to 20240216_120000
+# See what has changed since the last FULL capture
+datezip --status
 ```
 
 ### Maintenance and Automation
@@ -90,10 +85,15 @@ The CLI is organized into primary actions and their associated modifiers (sub-co
 | `--files LIST` | Modifier | (Sub-command of history) Filters history to specific files. |
 | `--from TS` | Modifier | (Sub-command of history) Filter start time (`YYYYMMDD_HHMMSS`). |
 | `--to TS` | Modifier | (Sub-command of history) Filter end time (`YYYYMMDD_HHMMSS`). |
+
+### 4. Maintenance and Utility
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
 | `--list` | Action | Lists available backup archives and their indices. |
+| `--status` | Action | Show changes (Modified, Deleted, Untracked) since the last FULL backup. |
 | `--reindex` | Action | Force-rebuilds the history cache from disk archives. |
 
-### 4. Global Modifiers
+### 5. Global Modifiers
 | Parameter | Description |
 | :--- | :--- |
 | `-q`, `--quiet` | Suppresses informational output; only errors are reported. |
