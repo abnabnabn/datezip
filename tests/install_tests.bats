@@ -75,13 +75,12 @@ teardown() {
     mkdir -p "$LEGACY_DIR"
     touch "$LEGACY_DIR/datezip"
     
-    # We need to tell the script about our fake legacy path
-    # Since LEGACY_PATH is hardcoded in install.sh, we'll temporarily patch it for this test
-    # or better, just ensure the test environment can handle it.
-    # Actually, install.sh uses /usr/bin/datezip which we can't easily change without patching the script.
-    
     # Let's patch install.sh for this specific test workspace to point to our fake legacy dir
-    sed -i "s|LEGACY_PATH=\"/usr/bin/datezip\"|LEGACY_PATH=\"$LEGACY_DIR/datezip\"|" "$INSTALL_SCRIPT"
+    # Using a portable sed approach that works on both GNU and BSD
+    sed "s|LEGACY_PATH=\"/usr/bin/datezip\"|LEGACY_PATH=\"$LEGACY_DIR/datezip\"|" "$INSTALL_SCRIPT" > "$INSTALL_SCRIPT.tmp"
+    mv "$INSTALL_SCRIPT.tmp" "$INSTALL_SCRIPT"
+    chmod +x "$INSTALL_SCRIPT"
+
     
     [ -f "$LEGACY_DIR/datezip" ]
     
