@@ -373,7 +373,7 @@ execute_history() {
     update_history_cache
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available."; return 0; }
     
-    local tmp_cache=$(mktemp)
+    local tmp_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
     while IFS='|' read -r ts status mtime f_name; do
         [[ "$status" == "*" ]] && continue
         [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
@@ -387,12 +387,12 @@ execute_history() {
         return 0
     fi
 
-    local sorted_cache=$(mktemp)
+    local sorted_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
     sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
     rm -f "$tmp_cache"
 
     if [[ -n "$HISTORY_LIMIT" ]]; then
-        local limited_cache=$(mktemp)
+        local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
         head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
         rm -f "$sorted_cache"
         sorted_cache="$limited_cache"
@@ -444,7 +444,7 @@ execute_status() {
     
     log "Comparing against latest FULL backup: $latest_full_ts"
     
-    local tmp_latest=$(mktemp)
+    local tmp_latest=$(mktemp 2>/dev/null || mktemp -t 'datezip')
     # Reconstruct state exactly as it was at that FULL backup by scanning history
     awk -F'|' -v target="$latest_full_ts" '
     $1 <= target {
@@ -458,7 +458,7 @@ execute_status() {
         }
     }' "$HISTORY_CACHE_FILE" | sort > "$tmp_latest"
     
-    local tmp_disk=$(mktemp)
+    local tmp_disk=$(mktemp 2>/dev/null || mktemp -t 'datezip')
     
     # Gold Standard: Use git if available for 100% accuracy on what should be tracked
     if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -496,7 +496,7 @@ execute_status() {
             # Get latest mtime from cache - anchored to start of line
             local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
             # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null)
+            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
             if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
                 [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
                 echo "  . $f"
@@ -520,12 +520,12 @@ execute_backup() {
     local filename="datezip_$(date +"$DATE_FORMAT")_${b_type}.zip"
     local dest_path="$BACKUP_DIR_NAME/$filename"
     log "Starting $b_type backup to $filename..."
-    local exclude_file=$(mktemp)
+    local exclude_file=$(mktemp 2>/dev/null || mktemp -t 'datezip')
     get_zip_excludes > "$exclude_file"
     local status=0
     
     if [[ "$b_type" == "INC" && -n "$last_backup" ]]; then
-        if [[ -z $(find . -type f -newer "$last_backup" -print -quit 2>/dev/null) ]]; then
+        if [[ -z $(find . -type f -newer "$last_backup" -print 2>/dev/null | head -n 1) ]]; then
             log "No changes detected."
             rm -f "$exclude_file"
             return

@@ -2,7 +2,7 @@
 
 setup() {
     # Create a temporary workspace
-    TEST_DIR=$(mktemp -d)
+    TEST_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'datezip')
     cd "$TEST_DIR" || exit 1
     # Path to the datezip.sh script
     DATEZIP="$BATS_TEST_DIRNAME/../datezip.sh"

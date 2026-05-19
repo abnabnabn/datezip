@@ -2,7 +2,7 @@
 
 setup() {
     # Create a temporary workspace for the installation
-    TEST_WORKSPACE=$(mktemp -d)
+    TEST_WORKSPACE=$(mktemp -d 2>/dev/null || mktemp -d -t 'datezip')
     INSTALL_DIR="$TEST_WORKSPACE/bin"
     mkdir -p "$INSTALL_DIR"
     
