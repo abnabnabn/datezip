@@ -528,7 +528,7 @@ execute_backup() {
         if [[ -z $(find . -type f -newer "$last_backup" -print 2>/dev/null | head -n 1) ]]; then
             log "No changes detected."
             rm -f "$exclude_file"
-            return
+            return 0
         fi
         find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
         status=$?
