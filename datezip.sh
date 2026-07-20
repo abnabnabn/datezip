@@ -488,23 +488,48 @@ execute_status() {
     fi
     
     # Modified: In both, check mtime
-    local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
-    if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+    # To avoid the slow file-by-file while loop that invokes nested subshells (grep, cut, stat/date)
+    # for every single file, we batch retrieve all current mtimes from disk in a single pass
+    # using xargs with stat, and then perform a fast in-memory comparison using awk.
+    local tmp_disk_mtimes=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+    if [[ -s "$tmp_disk" ]]; then
+        if stat --version >/dev/null 2>&1; then
+            # GNU stat
+            tr '\n' '\0' < "$tmp_disk" | xargs -0 stat -c "%n|%y" 2>/dev/null | awk -F'|' '{
+                split($2, parts, " ")
+                gsub("-", "", parts[1])
+                split(parts[2], time_parts, ".")
+                gsub(":", "", time_parts[1])
+                printf "%s|%s.%s\n", $1, parts[1], time_parts[1]
+            }' | sort > "$tmp_disk_mtimes"
+        else
+            # BSD stat (macOS)
+            tr '\n' '\0' < "$tmp_disk" | xargs -0 stat -f "%N|%Sm" -t "%Y%m%d.%H%M%S" 2>/dev/null | sort > "$tmp_disk_mtimes"
+        fi
+    fi
+
+    local modified_output
+    modified_output=$(awk -F'|' '
+    NR==FNR {
+        mtime[$1] = $2
+        next
+    }
+    {
+        file = $1
+        cached = $2
+        if (file in mtime) {
+            if (mtime[file] != cached) {
+                print "  . " file
+            }
+        }
+    }' "$tmp_disk_mtimes" "$tmp_latest")
+
+    if [[ -n "$modified_output" ]]; then
+        echo "Modified:"
+        echo "$modified_output"
     fi
     
-    rm -f "$tmp_latest" "$tmp_disk"
+    rm -f "$tmp_latest" "$tmp_disk" "$tmp_disk_mtimes"
 }
 
 execute_backup() {
