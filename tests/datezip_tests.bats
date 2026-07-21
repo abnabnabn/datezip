@@ -388,3 +388,57 @@ teardown() {
     cd ..
     [ -d "backups" ]
 }
+
+@test "restore-index rejects invalid value" {
+    run "$DATEZIP" --restore-index "abc"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --restore-index requires a non-negative integer"* ]]
+
+    run "$DATEZIP" --restore-index "-5"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --restore-index requires a non-negative integer"* ]]
+
+    run "$DATEZIP" --restore-index "1 + \$(id)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --restore-index requires a non-negative integer"* ]]
+}
+
+@test "restore-time rejects invalid value" {
+    run "$DATEZIP" --restore-time "abc"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --restore-time requires YYYYMMDD_HHMMSS format"* ]]
+
+    run "$DATEZIP" --restore-time "20240101-120000"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --restore-time requires YYYYMMDD_HHMMSS format"* ]]
+}
+
+@test "restore-type rejects invalid value" {
+    run "$DATEZIP" --restore-type "abc"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
+
+    run "$DATEZIP" --restore-type "x"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
+}
+
+@test "keep-full rejects invalid value" {
+    run "$DATEZIP" --cleanup --keep-full "abc"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --keep-full requires a non-negative integer"* ]]
+
+    run "$DATEZIP" --cleanup --keep-full "1 + \$(id)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --keep-full requires a non-negative integer"* ]]
+}
+
+@test "keep-days rejects invalid value" {
+    run "$DATEZIP" --cleanup --keep-days "abc"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --keep-days requires a non-negative integer"* ]]
+
+    run "$DATEZIP" --cleanup --keep-days "1 + \$(id)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Error: --keep-days requires a non-negative integer"* ]]
+}

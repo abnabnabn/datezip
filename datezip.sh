@@ -89,9 +89,18 @@ parse_args() {
             --full) FORCE_TYPE="FULL" ;;
             --inc) FORCE_TYPE="INC" ;;
             --restore) RESTORE_MODE=true ;;
-            --restore-index) RESTORE_INDEX="$2"; shift ;;
-            --restore-time) RESTORE_TIME="$2"; shift ;;
-            --restore-type) RESTORE_TYPE="$2"; shift ;;
+            --restore-index)
+                RESTORE_INDEX="$2"; shift
+                [[ ! "$RESTORE_INDEX" =~ ^[0-9]+$ ]] && { echo "Error: --restore-index requires a non-negative integer" >&2; exit 1; }
+                ;;
+            --restore-time)
+                RESTORE_TIME="$2"; shift
+                [[ ! "$RESTORE_TIME" =~ ^[0-9]{8}_[0-9]{6}$ ]] && { echo "Error: --restore-time requires YYYYMMDD_HHMMSS format" >&2; exit 1; }
+                ;;
+            --restore-type)
+                RESTORE_TYPE="$2"; shift
+                [[ ! "$RESTORE_TYPE" =~ ^[eEjJ]$ ]] && { echo "Error: --restore-type requires 'e' or 'j'" >&2; exit 1; }
+                ;;
             --dest) RESTORE_DEST="$2"; shift ;;
             --files) RESTORE_FILES="$2"; shift ;;
             --history) ACTION_HISTORY=true ;;
@@ -111,8 +120,14 @@ parse_args() {
             --list) ACTION_LIST=true ;;
             --status) ACTION_STATUS=true ;;
             --cleanup) ACTION_CLEANUP=true ;;
-            --keep-full) KEEP_FULL="$2"; shift ;;
-            --keep-days) KEEP_DAYS="$2"; shift ;;
+            --keep-full)
+                KEEP_FULL="$2"; shift
+                [[ ! "$KEEP_FULL" =~ ^[0-9]+$ ]] && { echo "Error: --keep-full requires a non-negative integer" >&2; exit 1; }
+                ;;
+            --keep-days)
+                KEEP_DAYS="$2"; shift
+                [[ ! "$KEEP_DAYS" =~ ^[0-9]+$ ]] && { echo "Error: --keep-days requires a non-negative integer" >&2; exit 1; }
+                ;;
             --local) FORCE_LOCAL=true ;;
             --git-root) FORCE_GIT_ROOT=true ;;
             *) echo "Error: Unknown parameter: $1" >&2; exit 1 ;;
