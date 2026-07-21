@@ -388,3 +388,30 @@ teardown() {
     cd ..
     [ -d "backups" ]
 }
+
+@test "input validation prevents command and arithmetic evaluation injection" {
+    # Test --keep-full invalid/malicious input
+    run "$DATEZIP" --cleanup --keep-full 'abc[$(id)]'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --keep-full requires a non-negative integer"* ]]
+
+    # Test --keep-days invalid/malicious input
+    run "$DATEZIP" --cleanup --keep-days '1; id'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --keep-days requires a non-negative integer"* ]]
+
+    # Test --restore-index invalid/malicious input
+    run "$DATEZIP" --restore-index 'a[$(id)]'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --restore-index requires a non-negative integer"* ]]
+
+    # Test --restore-time invalid/malicious input
+    run "$DATEZIP" --restore-time '20231024_120000; id'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --restore-time requires YYYYMMDD_HHMMSS format"* ]]
+
+    # Test --restore-type invalid/malicious input
+    run "$DATEZIP" --restore-index 0 --restore-type 'x'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
+}
