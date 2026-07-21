@@ -429,6 +429,35 @@ execute_history() {
     rm -f "$sorted_cache"
 }
 
+get_current_mtimes() {
+    if stat --version 2>/dev/null | grep -q "GNU coreutils"; then
+        # GNU stat
+        tr '\n' '\0' | xargs -0 stat -c "%y|%n" 2>/dev/null | awk -F'|' '
+        {
+            split($1, t, " ")
+            gsub(/-/, "", t[1])
+            split(t[2], s, ".")
+            gsub(/:/, "", s[1])
+            # Reconstruct filename if it contains pipes
+            file = $2
+            for (i = 3; i <= NF; i++) {
+                file = file "|" $i
+            }
+            print file "|" t[1] "." s[1]
+        }'
+    else
+        # BSD stat (macOS)
+        tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" 2>/dev/null | awk -F'|' '
+        {
+            file = $2
+            for (i = 3; i <= NF; i++) {
+                file = file "|" $i
+            }
+            print file "|" $1
+        }'
+    fi
+}
+
 execute_status() {
     update_history_cache
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available. Run a backup first."; return 0; }
@@ -487,24 +516,27 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
-    local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
-    if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+    # Modified: In both, check mtime using batch query and O(N) lookup
+    local tmp_current=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+    get_current_mtimes < "$tmp_disk" > "$tmp_current"
+
+    local modified_files=$(awk -F'|' '
+    NR==FNR {
+        cached[$1] = $2
+        next
+    }
+    {
+        if ($1 in cached && cached[$1] != $2) {
+            print $1
+        }
+    }' "$tmp_latest" "$tmp_current")
+
+    if [[ -n "$modified_files" ]]; then
+        echo "Modified:"
+        sed 's/^/  . /' <<< "$modified_files"
     fi
     
-    rm -f "$tmp_latest" "$tmp_disk"
+    rm -f "$tmp_latest" "$tmp_disk" "$tmp_current"
 }
 
 execute_backup() {
