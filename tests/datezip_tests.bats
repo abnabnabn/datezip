@@ -414,4 +414,29 @@ teardown() {
     run "$DATEZIP" --restore-index 0 --restore-type 'x'
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
+
+    # Test --dest option/argument injection
+    run "$DATEZIP" --restore-index 0 --dest '-v'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with '-'"* ]]
+
+    # Test --files option/argument injection
+    run "$DATEZIP" --restore-index 0 --files 'a.txt,-v,b.txt'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Filename in --files cannot start with '-'"* ]]
+}
+
+@test "execute_status handles regex and special characters in filenames safely" {
+    # Create filename with regex and special characters
+    echo "regex-content" > 'a*.txt'
+    "$DATEZIP" --full --quiet
+
+    sleep 1
+    echo "changed-regex-content" > 'a*.txt'
+
+    run "$DATEZIP" --status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Modified:"* ]]
+    [[ "$output" == *". a*.txt"* ]]
+    rm -f 'a*.txt'
 }

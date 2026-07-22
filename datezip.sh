@@ -104,8 +104,19 @@ parse_args() {
                 # Security: Strict validation of type values to prevent argument injection
                 [[ ! "$RESTORE_TYPE" =~ ^[eEjJ]$ ]] && { echo "Error: --restore-type requires 'e' or 'j'" >&2; exit 1; }
                 ;;
-            --dest) RESTORE_DEST="$2"; shift ;;
-            --files) RESTORE_FILES="$2"; shift ;;
+            --dest)
+                RESTORE_DEST="$2"; shift
+                # Security: Validate destination path to prevent option/argument injection
+                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with '-'" >&2; exit 1; }
+                ;;
+            --files)
+                RESTORE_FILES="$2"; shift
+                # Security: Validate file list to prevent option injection in downstream commands
+                IFS=',' read -ra test_files <<< "$RESTORE_FILES"
+                for f in "${test_files[@]}"; do
+                    [[ "$f" =~ ^- ]] && { echo "Error: Filename in --files cannot start with '-'" >&2; exit 1; }
+                done
+                ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
                 HISTORY_LIMIT="$2"; shift
@@ -513,8 +524,8 @@ execute_status() {
         local first_modified=true
         while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
+            # Get latest mtime from cache safely without regex or option injection
+            local cached_mtime=$(awk -F'|' -v fname="$f" '$1 == fname {print $2; exit}' "$tmp_latest")
             # Get current mtime
             local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
             if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then

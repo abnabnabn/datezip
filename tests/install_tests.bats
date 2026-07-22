@@ -89,3 +89,9 @@ teardown() {
     [ ! -f "$LEGACY_DIR/datezip" ]
     [[ "$output" == *"Removing legacy binary at $LEGACY_DIR/datezip..."* ]]
 }
+
+@test "install validation prevents target directory starting with dash" {
+    run "$INSTALL_SCRIPT" "-v"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Target directory cannot start with '-'"* ]]
+}
