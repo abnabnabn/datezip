@@ -507,21 +507,50 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime using optimized O(1) batch processing
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        # Detect GNU vs BSD stat
+        local stat_cmd
+        if stat --version >/dev/null 2>&1; then
+            # GNU stat
+            stat_cmd=(stat -c "%y|%n")
+        else
+            # BSD/macOS stat
+            stat_cmd=(stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S")
+        fi
+
+        echo "$common" | tr '\n' '\0' | xargs -0 "${stat_cmd[@]}" | awk -F'|' -v latest_file="$tmp_latest" '
+        BEGIN {
+            # Read cached mtimes from the latest FULL backup
+            while ((getline < latest_file) > 0) {
+                split($0, arr, "|")
+                cached[arr[1]] = arr[2]
+            }
+            close(latest_file)
+            first_modified = 1
+        }
+        {
+            file = $2
+            if ($1 ~ /-/) {
+                # Parse GNU stat output (YYYY-MM-DD HH:MM:SS.fffffffff +ZZZZ) to YYYYMMDD.HHMMSS
+                split($1, parts, " ")
+                gsub(/[-]/, "", parts[1])
+                mtime = parts[1] "." substr(parts[2], 1, 2) substr(parts[2], 4, 2) substr(parts[2], 7, 2)
+            } else {
+                # BSD/macOS stat formatted directly
+                mtime = $1
+            }
+
+            if (file in cached && cached[file] != mtime) {
+                if (first_modified == 1) {
+                    print "Modified:"
+                    first_modified = 0
+                }
+                print "  . " file
+            }
+        }
+        '
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
