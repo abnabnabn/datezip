@@ -510,18 +510,65 @@ execute_status() {
     # Modified: In both, check mtime
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        # Detect stat implementation to choose formatting parameters (GNU/BSD)
+        local stat_format=""
+        if stat -L -c "%Y" . >/dev/null 2>&1; then
+            stat_format="GNU"
+        elif stat -f "%m" . >/dev/null 2>&1; then
+            stat_format="BSD"
+        fi
+
+        # We batch file paths to stat using xargs and compare in a single O(N) awk process.
+        # This completely avoids looping and subshell invocation (e.g. stat, date) per file,
+        # reducing process-spawning overhead from O(N) to O(1).
+        local stat_output=""
+        if [[ "$stat_format" == "GNU" ]]; then
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -L -c "%y|%n" 2>/dev/null)
+        elif [[ "$stat_format" == "BSD" ]]; then
+            # On BSD, %Sm gets the formatted modification time of the file directly
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" 2>/dev/null)
+        fi
+
+        if [[ -n "$stat_output" ]]; then
+            echo "$stat_output" | awk -F'|' -v stat_format="$stat_format" -v tmp_latest="$tmp_latest" '
+            BEGIN {
+                # Load latest cached mtimes into associative array for O(1) lookups
+                while ((getline line < tmp_latest) > 0) {
+                    split(line, parts, "|")
+                    cached_mtimes[parts[1]] = parts[2]
+                }
+                close(tmp_latest)
+                first_modified = 1
+            }
+            {
+                raw_time = $1
+                f = $2
+                # Skip empty or missing files
+                if (f == "" || !(f in cached_mtimes)) next
+
+                # Format current mtime
+                if (stat_format == "GNU") {
+                    # Parse YYYY-MM-DD HH:MM:SS... to YYYYMMDD.HHMMSS using high-performance string manipulation
+                    split(raw_time, dt, " ")
+                    split(dt[1], d, "-")
+                    split(dt[2], t, ":")
+                    sub(/\..*/, "", t[3])
+                    current_mtime = d[1] d[2] d[3] "." t[1] t[2] t[3]
+                } else {
+                    # On BSD, stat already formatted it as YYYYMMDD.HHMMSS
+                    current_mtime = raw_time
+                }
+
+                if (cached_mtimes[f] != "" && current_mtime != cached_mtimes[f]) {
+                    if (first_modified == 1) {
+                        print "Modified:"
+                        first_modified = 0
+                    }
+                    print "  . " f
+                }
+            }
+            '
+        fi
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
