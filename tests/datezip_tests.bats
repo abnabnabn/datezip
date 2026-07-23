@@ -415,3 +415,15 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
 }
+
+@test "input validation prevents option and argument injection on paths and filenames" {
+    # Test --dest with a hyphen
+    run "$DATEZIP" --restore-index 0 --dest '-malicious-dir'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest path cannot start with a hyphen"* ]]
+
+    # Test --files with a hyphen
+    run "$DATEZIP" --restore-index 0 --files '-malicious-file,good.txt'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files element cannot start with a hyphen"* ]]
+}
