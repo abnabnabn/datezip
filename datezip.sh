@@ -507,21 +507,48 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime using a batched O(N) lookup/comparison to eliminate sequential subshell bottlenecks.
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local stat_format="BSD"
+        if stat --version >/dev/null 2>&1; then
+            stat_format="GNU"
+        fi
+
+        if [[ "$stat_format" == "GNU" ]]; then
+            echo "$common" | tr '\n' '\0' | xargs -0 stat -c "%y|%n" -- 2>/dev/null
+        else
+            echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" -- 2>/dev/null
+        fi | awk -F'|' -v cache_file="$tmp_latest" '
+            BEGIN {
+                while ((getline < cache_file) > 0) {
+                    cached_mtime = $NF
+                    file = substr($0, 1, length($0) - length($NF) - 1)
+                    cached[file] = cached_mtime
+                }
+                close(cache_file)
+                first_modified = 1
+            }
+            {
+                first = $1
+                file = substr($0, length(first) + 2)
+                if (first ~ /^[0-9]{8}\.[0-9]{6}$/) {
+                    mtime = first
+                } else {
+                    split(first, parts, " ")
+                    split(parts[1], d, "-")
+                    split(parts[2], t, ":")
+                    split(t[3], s, ".")
+                    mtime = d[1] d[2] d[3] "." t[1] t[2] s[1]
+                }
+                if (file in cached && cached[file] != mtime) {
+                    if (first_modified) {
+                        print "Modified:"
+                        first_modified = 0
+                    }
+                    print "  . " file
+                }
+            }'
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
