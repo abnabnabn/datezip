@@ -69,6 +69,12 @@ teardown() {
     [[ "$output" == *"Checking system dependencies..."* ]]
 }
 
+@test "install.sh target directory option injection prevention" {
+    run "$INSTALL_SCRIPT" "--help-me"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Target directory cannot start with a hyphen to prevent option injection"* ]]
+}
+
 @test "remove legacy binary" {
     # Mock legacy path directory
     LEGACY_DIR="$TEST_WORKSPACE/usr/bin"

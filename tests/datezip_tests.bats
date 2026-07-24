@@ -415,3 +415,13 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
 }
+
+@test "prevent option injection on --dest and --files" {
+    run "$DATEZIP" --restore-index 0 --dest '-o'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with a hyphen to prevent option injection"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files '-f'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot start with a hyphen to prevent option injection"* ]]
+}
