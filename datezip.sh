@@ -507,21 +507,70 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime.
+    # Performance Optimization (Bolt ⚡):
+    # Sequential file querying inside loops causes process execution bottlenecks (grep + date/stat on every file).
+    # We optimize this by batching the files via xargs and comparing their cached and current mtimes
+    # in a single O(N) awk run. To prevent compile-time crashes in BSD awk (like macOS's One True Awk),
+    # we completely avoid using strftime inside the awk script, parsing GNU or BSD stat outputs purely
+    # through string manipulation.
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local stat_cmd=()
+        if stat --version >/dev/null 2>&1; then
+            # GNU stat: Output modification time as %y and file name as %n
+            stat_cmd=("stat" "-c" "%y|%n")
+        else
+            # BSD stat (macOS/FreeBSD): Format directly to %Y%m%d.%H%M%S and file name as %N
+            stat_cmd=("stat" "-f" "%Sm|%N" "-t" "%Y%m%d.%H%M%S")
+        fi
+
+        # Batch query file metadata using xargs and compare in O(N) using awk associative arrays
+        local modified_list
+        modified_list=$(echo "$common" | tr '\n' '\0' | xargs -0 "${stat_cmd[@]}" -- 2>/dev/null | awk -v tmp_latest="$tmp_latest" '
+        BEGIN {
+            while ((getline < tmp_latest) > 0) {
+                idx = index($0, "|")
+                if (idx > 0) {
+                    fname = substr($0, 1, idx - 1)
+                    mtime_val = substr($0, idx + 1)
+                    cached[fname] = mtime_val
+                }
+            }
+            close(tmp_latest)
+        }
+        {
+            idx = index($0, "|")
+            if (idx > 0) {
+                mtime_part = substr($0, 1, idx - 1)
+                f = substr($0, idx + 1)
+
+                # Parse GNU vs BSD stat mtime to standard YYYYMMDD.HHMMSS format
+                if (mtime_part ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/) {
+                    split(mtime_part, parts, " ")
+                    dt = parts[1]
+                    tm = parts[2]
+                    gsub(/-/, "", dt)
+                    split(tm, subparts, ".")
+                    tm_sec = subparts[1]
+                    gsub(/:/, "", tm_sec)
+                    current_mtime = dt "." tm_sec
+                } else {
+                    current_mtime = mtime_part
+                }
+
+                if (f in cached) {
+                    if (cached[f] != current_mtime) {
+                        print "  . " f
+                    }
+                }
+            }
+        }' | sort)
+
+        if [[ -n "$modified_list" ]]; then
+            echo "Modified:"
+            echo "$modified_list"
+        fi
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
