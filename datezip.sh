@@ -104,8 +104,16 @@ parse_args() {
                 # Security: Strict validation of type values to prevent argument injection
                 [[ ! "$RESTORE_TYPE" =~ ^[eEjJ]$ ]] && { echo "Error: --restore-type requires 'e' or 'j'" >&2; exit 1; }
                 ;;
-            --dest) RESTORE_DEST="$2"; shift ;;
-            --files) RESTORE_FILES="$2"; shift ;;
+            --dest)
+                RESTORE_DEST="$2"; shift
+                # Security: Validate dest to prevent option/argument injection
+                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                ;;
+            --files)
+                RESTORE_FILES="$2"; shift
+                # Security: Validate files to prevent option/argument injection
+                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
                 HISTORY_LIMIT="$2"; shift
@@ -513,8 +521,8 @@ execute_status() {
         local first_modified=true
         while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
+            # Get latest mtime from cache using fixed-string awk instead of unescaped regex grep
+            local cached_mtime=$(awk -F'|' -v file="$f" '$1 == file { print $2 }' "$tmp_latest")
             # Get current mtime
             local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
             if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
@@ -605,7 +613,13 @@ execute_restore() {
     
     local selected="${sorted[$choice]}"
     local target_files=()
-    [[ -n "$RESTORE_FILES" ]] && IFS=',' read -ra target_files <<< "$RESTORE_FILES"
+    if [[ -n "$RESTORE_FILES" ]]; then
+        IFS=',' read -ra target_files <<< "$RESTORE_FILES"
+        # Security: Validate that none of the target files start with a hyphen to prevent option injection in unzip
+        for f in "${target_files[@]}"; do
+            [[ "$f" =~ ^- ]] && { echo "Error: file to restore cannot start with a hyphen: $f" >&2; exit 1; }
+        done
+    fi
     
     local mode="$RESTORE_TYPE"
     if [[ "$selected" == *"_INC.zip" && -z "$mode" ]]; then
