@@ -414,4 +414,14 @@ teardown() {
     run "$DATEZIP" --restore-index 0 --restore-type 'x'
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
+
+    # Test --dest hyphen validation
+    run "$DATEZIP" --restore-index 0 --dest '-some-bad-dir'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+
+    # Test --files hyphen validation
+    run "$DATEZIP" --restore-index 0 --files '-some-bad-file'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
 }

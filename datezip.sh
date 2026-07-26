@@ -104,8 +104,14 @@ parse_args() {
                 # Security: Strict validation of type values to prevent argument injection
                 [[ ! "$RESTORE_TYPE" =~ ^[eEjJ]$ ]] && { echo "Error: --restore-type requires 'e' or 'j'" >&2; exit 1; }
                 ;;
-            --dest) RESTORE_DEST="$2"; shift ;;
-            --files) RESTORE_FILES="$2"; shift ;;
+            --dest)
+                RESTORE_DEST="$2"; shift
+                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                ;;
+            --files)
+                RESTORE_FILES="$2"; shift
+                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
                 HISTORY_LIMIT="$2"; shift
@@ -347,8 +353,8 @@ update_history_cache() {
 
 execute_reindex() {
     log "Rebuilding history cache..."
-    mkdir -p "$BACKUP_DIR_NAME"
-    rm -f "$HISTORY_CACHE_FILE"
+    mkdir -p -- "$BACKUP_DIR_NAME"
+    rm -f -- "$HISTORY_CACHE_FILE"
     touch "$HISTORY_CACHE_FILE"
     
     shopt -s nullglob
@@ -513,8 +519,8 @@ execute_status() {
         local first_modified=true
         while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
+            # Get latest mtime from cache - anchored to start of line using fixed-string comparison
+            local cached_mtime=$(awk -F'|' -v fname="$f" '$1 == fname {print $2; exit}' "$tmp_latest")
             # Get current mtime
             local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
             if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
@@ -528,7 +534,7 @@ execute_status() {
 }
 
 execute_backup() {
-    mkdir -p "$BACKUP_DIR_NAME"
+    mkdir -p -- "$BACKUP_DIR_NAME"
     local last_backup=""
     local b_type="FULL"
     local today=$(date +"%Y%m%d")
@@ -613,7 +619,7 @@ execute_restore() {
         read -r -p "Restore [E]verything or [J]ust increment? (e/j): " mode
     fi
     
-    mkdir -p "$RESTORE_DEST"
+    mkdir -p -- "$RESTORE_DEST"
     log "Restoring to $RESTORE_DEST..."
     if [[ "$mode" =~ ^[Ee]$ ]]; then
         local start_idx=0
