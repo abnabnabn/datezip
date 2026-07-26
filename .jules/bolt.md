@@ -1,0 +1,5 @@
+# Bolt ⚡ Performance Journal
+
+## 2026-07-26 - Avoid Subshells and Sequential Greps in Bash Loops
+**Learning:** Querying metadata sequentially via `date` or `stat` in a shell loop and searching with sequential `grep` is a massive $O(N \times M)$ performance bottleneck. Grouping file arguments using `xargs` with platform-specific `stat` configurations (GNU vs BSD) and pipe-feeding the output directly into a single $O(N)$ `awk` process with associative arrays completely removes shell overhead and delivers a massive speedup. Furthermore, using `strftime` in `awk` blocks must be avoided entirely to prevent compile-time crashes in BSD `awk` implementations (such as One True Awk on macOS), meaning GNU `stat` output parsing must be done using string manipulation functions within `awk`.
+**Action:** Batch filesystem metadata operations via `xargs` with trailing `--` delimiters for option-injection defense, and handle platform disparities cleanly while performing data aggregation/lookup within a single `awk` pass.

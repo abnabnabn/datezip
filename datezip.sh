@@ -508,20 +508,56 @@ execute_status() {
     fi
     
     # Modified: In both, check mtime
+    # OPTIMIZATION: Batched 'xargs stat' to avoid slow sequential loops and O(N) grep queries.
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        # Detect GNU vs BSD stat
+        local is_gnu=false
+        local stat_cmd=()
+        if stat --version >/dev/null 2>&1; then
+            stat_cmd=(stat -c "%y|%n" --)
+            is_gnu=true
+        else
+            stat_cmd=(stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" --)
+        fi
+
+        # Run stat in batches using xargs, and pipe to awk for O(N) comparison
+        # Using xargs -0 with null byte translation for safety with spaces/special characters
+        echo "$common" | tr '\n' '\0' | xargs -0 "${stat_cmd[@]}" 2>/dev/null | awk -F'|' -v is_gnu="$is_gnu" '
+        FILENAME == ARGV[1] {
+            # Loading tmp_latest: file_name|cached_mtime
+            # Reconstruct filename and extract cached mtime safely even if file_name contains pipes
+            m = $NF
+            file = substr($0, 1, length($0) - length(m) - 1)
+            cached[file] = m
+            next
+        }
+        {
+            # Output of stat: current_mtime|file_name
+            # Reconstruct filename safely even if file_name contains pipes
+            mtime = $1
+            file = substr($0, index($0, "|") + 1)
+
+            # Translate GNU stat output to standard YYYYMMDD.HHMMSS format via string manipulation
+            if (is_gnu == "true") {
+                gsub(/[:-]/, "", mtime)
+                split(mtime, parts, " ")
+                date_part = parts[1]
+                time_part = substr(parts[2], 1, 6)
+                mtime = date_part "." time_part
+            }
+
+            if (file in cached) {
+                if (mtime != cached[file]) {
+                    if (!first_modified) {
+                        print "Modified:"
+                        first_modified = 1
+                    }
+                    print "  . " file
+                }
+            }
+        }
+        ' "$tmp_latest" -
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
