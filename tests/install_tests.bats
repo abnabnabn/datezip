@@ -89,3 +89,9 @@ teardown() {
     [ ! -f "$LEGACY_DIR/datezip" ]
     [[ "$output" == *"Removing legacy binary at $LEGACY_DIR/datezip..."* ]]
 }
+
+@test "reject hyphen-prefixed target directory" {
+    run "$INSTALL_SCRIPT" "-bad-dir"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Target directory path cannot start with a hyphen"* ]]
+}

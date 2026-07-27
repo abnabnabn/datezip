@@ -415,3 +415,15 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
 }
+
+@test "security validation rejects hyphen-prefixed dest and files" {
+    # Test that --dest cannot start with a hyphen to prevent option injection
+    run "$DATEZIP" --restore-index 0 --dest '-some-bad-flag'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+
+    # Test that --files cannot start with a hyphen to prevent option injection
+    run "$DATEZIP" --restore-index 0 --files '-some-bad-flag'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+}

@@ -104,8 +104,16 @@ parse_args() {
                 # Security: Strict validation of type values to prevent argument injection
                 [[ ! "$RESTORE_TYPE" =~ ^[eEjJ]$ ]] && { echo "Error: --restore-type requires 'e' or 'j'" >&2; exit 1; }
                 ;;
-            --dest) RESTORE_DEST="$2"; shift ;;
-            --files) RESTORE_FILES="$2"; shift ;;
+            --dest)
+                RESTORE_DEST="$2"; shift
+                # Security: Validate that destination does not start with a hyphen to prevent option injection
+                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                ;;
+            --files)
+                RESTORE_FILES="$2"; shift
+                # Security: Validate that files do not start with a hyphen to prevent option injection
+                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
                 HISTORY_LIMIT="$2"; shift
@@ -347,9 +355,9 @@ update_history_cache() {
 
 execute_reindex() {
     log "Rebuilding history cache..."
-    mkdir -p "$BACKUP_DIR_NAME"
-    rm -f "$HISTORY_CACHE_FILE"
-    touch "$HISTORY_CACHE_FILE"
+    mkdir -p -- "$BACKUP_DIR_NAME"
+    rm -f -- "$HISTORY_CACHE_FILE"
+    touch -- "$HISTORY_CACHE_FILE"
     
     shopt -s nullglob
     local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
@@ -414,7 +422,7 @@ execute_history() {
     if [[ -n "$HISTORY_LIMIT" ]]; then
         local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
         head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
-        rm -f "$sorted_cache"
+        rm -f -- "$sorted_cache"
         sorted_cache="$limited_cache"
     fi
 
@@ -446,7 +454,7 @@ execute_history() {
         echo ""
     fi
     echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
-    rm -f "$sorted_cache"
+    rm -f -- "$sorted_cache"
 }
 
 execute_status() {
@@ -513,8 +521,8 @@ execute_status() {
         local first_modified=true
         while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
+            # Get latest mtime from cache - fixed-string awk comparison to prevent unescaped regex/option injection
+            local cached_mtime=$(awk -F'|' -v fname="$f" '$1 == fname { print $2; exit }' "$tmp_latest")
             # Get current mtime
             local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
             if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
@@ -524,11 +532,11 @@ execute_status() {
         done <<< "$common"
     fi
     
-    rm -f "$tmp_latest" "$tmp_disk"
+    rm -f -- "$tmp_latest" "$tmp_disk"
 }
 
 execute_backup() {
-    mkdir -p "$BACKUP_DIR_NAME"
+    mkdir -p -- "$BACKUP_DIR_NAME"
     local last_backup=""
     local b_type="FULL"
     local today=$(date +"%Y%m%d")
@@ -547,7 +555,7 @@ execute_backup() {
     if [[ "$b_type" == "INC" && -n "$last_backup" ]]; then
         if [[ -z $(find . -type f -newer "$last_backup" -print 2>/dev/null | head -n 1) ]]; then
             log "No changes detected."
-            rm -f "$exclude_file"
+            rm -f -- "$exclude_file"
             return 0
         fi
         find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
@@ -556,13 +564,13 @@ execute_backup() {
         zip -r "$dest_path" . -x@"${exclude_file}" -q
         status=$?
     fi
-    rm -f "$exclude_file"
+    rm -f -- "$exclude_file"
     
     if [[ $status -eq 0 || $status -eq 12 ]]; then
         log "Backup complete: $filename"
     else
         echo "Error: Backup failed." >&2
-        rm -f "$dest_path"
+        rm -f -- "$dest_path"
         exit 1
     fi
 }
@@ -613,7 +621,7 @@ execute_restore() {
         read -r -p "Restore [E]verything or [J]ust increment? (e/j): " mode
     fi
     
-    mkdir -p "$RESTORE_DEST"
+    mkdir -p -- "$RESTORE_DEST"
     log "Restoring to $RESTORE_DEST..."
     if [[ "$mode" =~ ^[Ee]$ ]]; then
         local start_idx=0
@@ -657,7 +665,7 @@ execute_cleanup() {
         for inc in "${incs[@]}"; do 
             if [[ "$inc" < "$latest" ]]; then 
                 log "Deleting: $(basename "$inc")"
-                rm -f "$inc"
+                rm -f -- "$inc"
             fi
         done
     fi
@@ -672,7 +680,7 @@ execute_cleanup() {
             # This implements the "whichever rule yields the larger retention set" logic.
             if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
                 log "Deleting: $(basename "$f")"
-                rm -f "$f"
+                rm -f -- "$f"
             fi
         done
     fi
