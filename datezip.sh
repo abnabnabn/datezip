@@ -510,18 +510,62 @@ execute_status() {
     # Modified: In both, check mtime
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        # Detect if GNU stat or BSD stat is available
+        local is_gnu_stat=false
+        if stat --version >/dev/null 2>&1; then
+            is_gnu_stat=true
+        fi
+
+        local tmp_common=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+        echo "$common" > "$tmp_common"
+
+        local stat_out=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+        if [[ "$is_gnu_stat" == true ]]; then
+            # Protect against option/argument injection by using --
+            tr '\n' '\0' < "$tmp_common" | xargs -0 stat -c "%y|%n" -- > "$stat_out"
+        else
+            # Protect against option/argument injection by using --
+            tr '\n' '\0' < "$tmp_common" | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" -- > "$stat_out"
+        fi
+
+        # Compare cached and current mtimes in a single O(N) awk process
+        # Avoid using strftime in awk to prevent compile-time crashes in BSD/macOS awk
+        awk -F'|' -v is_gnu="$is_gnu_stat" '
+        NR == FNR {
+            # File 1: tmp_latest (format: filepath|cached_mtime)
+            cached[$1] = $2
+            next
+        }
+        {
+            # File 2: stat_out (format: mtime|filepath or date|filepath)
+            if (is_gnu == "true") {
+                # $1 format: YYYY-MM-DD HH:MM:SS.fffffffff +ZZZZ
+                y = substr($1, 1, 4)
+                m = substr($1, 6, 2)
+                d = substr($1, 9, 2)
+                h = substr($1, 12, 2)
+                min = substr($1, 15, 2)
+                s = substr($1, 18, 2)
+                current_mtime = y m d "." h min s
+                file = $2
+            } else {
+                # $1 format: YYYYMMDD.HHMMSS
+                current_mtime = $1
+                file = $2
+            }
+
+            if (file in cached) {
+                if (cached[file] != current_mtime) {
+                    if (!has_printed) {
+                        print "Modified:"
+                        has_printed = 1
+                    }
+                    print "  . " file
+                }
+            }
+        }' "$tmp_latest" "$stat_out"
+
+        rm -f "$tmp_common" "$stat_out"
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
