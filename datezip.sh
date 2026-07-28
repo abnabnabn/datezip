@@ -507,21 +507,62 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime using optimized batch query
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local stat_cmd=()
+        if stat --version >/dev/null 2>&1; then
+            stat_cmd=("stat" "-c" "%y|%n" "--")
+        else
+            stat_cmd=("stat" "-f" "%Sm|%N" "-t" "%Y%m%d.%H%M%S" "--")
+        fi
+
+        # Batch query file modification times and compare using awk in O(N)
+        local modified_files
+        modified_files=$(echo "$common" | tr '\n' '\0' | xargs -0 "${stat_cmd[@]}" 2>/dev/null | awk -F'|' '
+        function format_mtime(y) {
+            if (y ~ /^[0-9]{8}\.[0-9]{6}$/) {
+                return y
+            }
+            # Parse GNU stat format "YYYY-MM-DD HH:MM:SS.xxxxxxxxx +zzzz" using string extraction
+            year = substr(y, 1, 4)
+            month = substr(y, 6, 2)
+            day = substr(y, 9, 2)
+            hour = substr(y, 12, 2)
+            min = substr(y, 15, 2)
+            sec = substr(y, 18, 2)
+            return year month day "." hour min sec
+        }
+        NR == FNR {
+            # Parse tmp_latest which has format "filename|cached_mtime"
+            idx = match($0, /\|[0-9]{8}\.[0-9]{6}$/)
+            if (idx > 0) {
+                fname = substr($0, 1, idx - 1)
+                mtime = substr($0, idx + 1)
+                cached[fname] = mtime
+            }
+            next
+        }
+        {
+            # Parse stat_cmd output which has format "mtime|filename"
+            idx = index($0, "|")
+            if (idx > 0) {
+                mtime_str = substr($0, 1, idx - 1)
+                fname = substr($0, idx + 1)
+                current_mtime = format_mtime(mtime_str)
+                if (fname in cached) {
+                    if (cached[fname] != current_mtime) {
+                        print "  . " fname
+                    }
+                }
+            }
+        }
+        ' "$tmp_latest" -)
+
+        if [[ -n "$modified_files" ]]; then
+            echo "Modified:"
+            echo "$modified_files"
+        fi
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
