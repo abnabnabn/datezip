@@ -415,3 +415,17 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
 }
+
+@test "input validation rejects hyphen values for paths and files to prevent option injection" {
+    run "$DATEZIP" --dest "-v"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+
+    run "$DATEZIP" --files "-x"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+
+    run "$DATEZIP" --files "file1.txt,-x,file2.txt"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: file path cannot start with a hyphen: -x"* ]]
+}
