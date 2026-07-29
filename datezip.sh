@@ -508,20 +508,54 @@ execute_status() {
     fi
     
     # Modified: In both, check mtime
+    # Optimization: Perform a batched, O(N) metadata query with xargs stat
+    # instead of a slow loop calling grep and stat/date individually for each file.
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local is_gnu=false
+        if stat --version 2>/dev/null | grep -q "GNU"; then
+            is_gnu=true
+        fi
+
+        local stat_output
+        if [[ "$is_gnu" == "true" ]]; then
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -c "%y|%n" -- 2>/dev/null)
+        else
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" -- 2>/dev/null)
+        fi
+
+        local modified_files
+        modified_files=$(awk -F'|' -v is_gnu="$is_gnu" '
+            NR == FNR {
+                mtimes[$1] = $2
+                next
+            }
+            {
+                raw_mtime = $1
+                f = substr($0, length(raw_mtime) + 2)
+
+                if (is_gnu == "true") {
+                    split(raw_mtime, parts, " ")
+                    gsub(/-/, "", parts[1])
+                    split(parts[2], t_parts, ".")
+                    gsub(/:/, "", t_parts[1])
+                    current_mtime = parts[1] "." t_parts[1]
+                } else {
+                    current_mtime = raw_mtime
+                }
+
+                if (f in mtimes) {
+                    if (current_mtime != mtimes[f]) {
+                        print f
+                    }
+                }
+            }
+        ' "$tmp_latest" <(echo "$stat_output"))
+
+        if [[ -n "$modified_files" ]]; then
+            echo "Modified:"
+            sed 's/^/  . /' <<< "$modified_files"
+        fi
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
