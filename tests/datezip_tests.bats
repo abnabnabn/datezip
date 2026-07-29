@@ -415,3 +415,20 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
 }
+
+@test "input validation prevents option injection on --dest and --files" {
+    # Test --dest starting with hyphen
+    run "$DATEZIP" --restore-index 0 --dest '-invalid_dest'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+
+    # Test --files starting with hyphen
+    run "$DATEZIP" --restore-index 0 --files '-invalid_file'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files items cannot start with a hyphen"* ]]
+
+    # Test --files with multiple items where one starts with a hyphen
+    run "$DATEZIP" --restore-index 0 --files 'file1.txt,-invalid_file'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files items cannot start with a hyphen"* ]]
+}
