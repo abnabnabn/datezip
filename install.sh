@@ -54,6 +54,9 @@ while [[ "$#" -gt 0 ]]; do
         --symlink|-s) USE_SYMLINK=true ;;
         -h|--help) show_usage ;;
         *) 
+            if [[ "$1" =~ ^- ]]; then
+                error_exit "Unknown option or invalid target directory: $1"
+            fi
             if [[ -z "$TARGET_DIR" ]]; then
                 TARGET_DIR="$1"
             else
@@ -100,21 +103,21 @@ fi
 
 # Ensure the target directory exists
 if [[ ! -d "$TARGET_DIR" ]]; then
-    $SUDO_CMD mkdir -p "$TARGET_DIR" || error_exit "Failed to create directory $TARGET_DIR"
+    $SUDO_CMD mkdir -p -- "$TARGET_DIR" || error_exit "Failed to create directory $TARGET_DIR"
 fi
 
 INSTALL_SUCCESS=false
 if [[ "$USE_SYMLINK" == true ]]; then
     # Use absolute path for symlink to ensure it remains valid
     ABS_SOURCE="$(pwd)/$SOURCE_FILE"
-    chmod +x "$SOURCE_FILE"
-    if $SUDO_CMD ln -sf "$ABS_SOURCE" "$TARGET_PATH"; then
+    chmod +x -- "$SOURCE_FILE"
+    if $SUDO_CMD ln -sf -- "$ABS_SOURCE" "$TARGET_PATH"; then
         INSTALL_SUCCESS=true
     fi
 else
     # Use -f to force overwrite without prompting
-    if $SUDO_CMD cp -f "$SOURCE_FILE" "$TARGET_PATH"; then
-        $SUDO_CMD chmod +x "$TARGET_PATH"
+    if $SUDO_CMD cp -f -- "$SOURCE_FILE" "$TARGET_PATH"; then
+        $SUDO_CMD chmod +x -- "$TARGET_PATH"
         INSTALL_SUCCESS=true
     fi
 fi
@@ -124,9 +127,9 @@ if [[ "$INSTALL_SUCCESS" == true ]]; then
     if [[ -f "$LEGACY_PATH" ]]; then
         log "Removing legacy binary at $LEGACY_PATH..."
         if [[ -w "$(dirname "$LEGACY_PATH")" ]]; then
-            rm -f "$LEGACY_PATH"
+            rm -f -- "$LEGACY_PATH"
         else
-            sudo rm -f "$LEGACY_PATH"
+            sudo rm -f -- "$LEGACY_PATH"
         fi
     fi
 

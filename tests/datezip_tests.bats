@@ -415,3 +415,15 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
 }
+
+@test "input validation prevents hyphen option injection" {
+    # Test --dest hyphen-prefixed input
+    run "$DATEZIP" --dest '-malicious-flag'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+
+    # Test --files hyphen-prefixed input
+    run "$DATEZIP" --files '-malicious-flag'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+}
