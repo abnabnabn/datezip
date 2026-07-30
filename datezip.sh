@@ -507,21 +507,62 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime (highly optimized using batched xargs stat and O(N) awk comparison)
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local tmp_current=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+        local is_gnu_stat=false
+        if stat --version >/dev/null 2>&1; then
+            is_gnu_stat=true
+        fi
+
+        if [[ "$is_gnu_stat" == true ]]; then
+            echo "$common" | tr '\n' '\0' | xargs -0 stat -c "%y|%n" -- 2>/dev/null | awk '
+            {
+                idx = index($0, "|")
+                if (idx > 0) {
+                    dt = substr($0, 1, idx - 1)
+                    filename = substr($0, idx + 1)
+                    sub(/^\.\//, "", filename)
+                    mtime = substr(dt, 1, 4) substr(dt, 6, 2) substr(dt, 9, 2) "." substr(dt, 12, 2) substr(dt, 15, 2) substr(dt, 18, 2)
+                    print filename "|" mtime
+                }
+            }' > "$tmp_current"
+        else
+            echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" -- 2>/dev/null | awk '
+            {
+                idx = index($0, "|")
+                if (idx > 0) {
+                    mtime = substr($0, 1, idx - 1)
+                    filename = substr($0, idx + 1)
+                    sub(/^\.\//, "", filename)
+                    print filename "|" mtime
+                }
+            }' > "$tmp_current"
+        fi
+
+        local modified_files
+        modified_files=$(awk -F'|' '
+        NR == FNR {
+            filename = $1
+            sub(/^\.\//, "", filename)
+            cached[filename] = $2
+            next
+        }
+        {
+            filename = $1
+            sub(/^\.\//, "", filename)
+            curr_mtime = $2
+            if (filename in cached && cached[filename] != curr_mtime) {
+                print filename
+            }
+        }' "$tmp_latest" "$tmp_current")
+
+        if [[ -n "$modified_files" ]]; then
+            echo "Modified:"
+            sed 's/^/  . /' <<< "$modified_files"
+        fi
+        rm -f "$tmp_current"
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
