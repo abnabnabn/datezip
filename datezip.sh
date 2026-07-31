@@ -104,8 +104,17 @@ parse_args() {
                 # Security: Strict validation of type values to prevent argument injection
                 [[ ! "$RESTORE_TYPE" =~ ^[eEjJ]$ ]] && { echo "Error: --restore-type requires 'e' or 'j'" >&2; exit 1; }
                 ;;
-            --dest) RESTORE_DEST="$2"; shift ;;
-            --files) RESTORE_FILES="$2"; shift ;;
+            --dest)
+                RESTORE_DEST="$2"; shift
+                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                ;;
+            --files)
+                RESTORE_FILES="$2"; shift
+                if [[ "$RESTORE_FILES" =~ ^- ]] || [[ ",$RESTORE_FILES," =~ ,- ]]; then
+                    echo "Error: --files elements cannot start with a hyphen" >&2
+                    exit 1
+                fi
+                ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
                 HISTORY_LIMIT="$2"; shift
@@ -347,9 +356,9 @@ update_history_cache() {
 
 execute_reindex() {
     log "Rebuilding history cache..."
-    mkdir -p "$BACKUP_DIR_NAME"
-    rm -f "$HISTORY_CACHE_FILE"
-    touch "$HISTORY_CACHE_FILE"
+    mkdir -p -- "$BACKUP_DIR_NAME"
+    rm -f -- "$HISTORY_CACHE_FILE"
+    touch -- "$HISTORY_CACHE_FILE"
     
     shopt -s nullglob
     local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
@@ -403,18 +412,18 @@ execute_history() {
     
     if [[ ! -s "$tmp_cache" ]]; then
         echo "No history found for the specified criteria."
-        rm -f "$tmp_cache"
+        rm -f -- "$tmp_cache"
         return 0
     fi
 
     local sorted_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-    sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
-    rm -f "$tmp_cache"
+    sort -r -t'|' -k1,1 -- "$tmp_cache" > "$sorted_cache"
+    rm -f -- "$tmp_cache"
 
     if [[ -n "$HISTORY_LIMIT" ]]; then
         local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-        head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
-        rm -f "$sorted_cache"
+        head -n "$HISTORY_LIMIT" -- "$sorted_cache" > "$limited_cache"
+        rm -f -- "$sorted_cache"
         sorted_cache="$limited_cache"
     fi
 
@@ -446,7 +455,7 @@ execute_history() {
         echo ""
     fi
     echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
-    rm -f "$sorted_cache"
+    rm -f -- "$sorted_cache"
 }
 
 execute_status() {
@@ -494,27 +503,27 @@ execute_status() {
     echo "Changes since FULL backup ($latest_full_ts):"
     
     # Deleted: In FULL backup but not on disk
-    local deleted=$(comm -23 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
+    local deleted=$(comm -23 <(cut -d'|' -f1 -- "$tmp_latest") "$tmp_disk")
     if [[ -n "$deleted" ]]; then
         echo "Deleted:"
         sed 's/^/  - /' <<< "$deleted"
     fi
     
     # Untracked: On disk but not in FULL backup
-    local untracked=$(comm -13 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
+    local untracked=$(comm -13 <(cut -d'|' -f1 -- "$tmp_latest") "$tmp_disk")
     if [[ -n "$untracked" ]]; then
         echo "Untracked:"
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
     # Modified: In both, check mtime
-    local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
+    local common=$(comm -12 <(cut -d'|' -f1 -- "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
         local first_modified=true
         while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
+            # Get latest mtime from cache - using safe awk with exact string comparison to prevent regex/option injection
+            local cached_mtime=$(awk -F'|' -v file="$f" '$1 == file {print $2; exit}' "$tmp_latest")
             # Get current mtime
             local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
             if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
@@ -524,11 +533,11 @@ execute_status() {
         done <<< "$common"
     fi
     
-    rm -f "$tmp_latest" "$tmp_disk"
+    rm -f -- "$tmp_latest" "$tmp_disk"
 }
 
 execute_backup() {
-    mkdir -p "$BACKUP_DIR_NAME"
+    mkdir -p -- "$BACKUP_DIR_NAME"
     local last_backup=""
     local b_type="FULL"
     local today=$(date +"%Y%m%d")
@@ -547,7 +556,7 @@ execute_backup() {
     if [[ "$b_type" == "INC" && -n "$last_backup" ]]; then
         if [[ -z $(find . -type f -newer "$last_backup" -print 2>/dev/null | head -n 1) ]]; then
             log "No changes detected."
-            rm -f "$exclude_file"
+            rm -f -- "$exclude_file"
             return 0
         fi
         find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
@@ -556,13 +565,13 @@ execute_backup() {
         zip -r "$dest_path" . -x@"${exclude_file}" -q
         status=$?
     fi
-    rm -f "$exclude_file"
+    rm -f -- "$exclude_file"
     
     if [[ $status -eq 0 || $status -eq 12 ]]; then
         log "Backup complete: $filename"
     else
         echo "Error: Backup failed." >&2
-        rm -f "$dest_path"
+        rm -f -- "$dest_path"
         exit 1
     fi
 }
@@ -613,7 +622,7 @@ execute_restore() {
         read -r -p "Restore [E]verything or [J]ust increment? (e/j): " mode
     fi
     
-    mkdir -p "$RESTORE_DEST"
+    mkdir -p -- "$RESTORE_DEST"
     log "Restoring to $RESTORE_DEST..."
     if [[ "$mode" =~ ^[Ee]$ ]]; then
         local start_idx=0
@@ -657,7 +666,7 @@ execute_cleanup() {
         for inc in "${incs[@]}"; do 
             if [[ "$inc" < "$latest" ]]; then 
                 log "Deleting: $(basename "$inc")"
-                rm -f "$inc"
+                rm -f -- "$inc"
             fi
         done
     fi
@@ -672,7 +681,7 @@ execute_cleanup() {
             # This implements the "whichever rule yields the larger retention set" logic.
             if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
                 log "Deleting: $(basename "$f")"
-                rm -f "$f"
+                rm -f -- "$f"
             fi
         done
     fi
