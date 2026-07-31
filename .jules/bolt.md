@@ -1,0 +1,3 @@
+## 2026-07-31 - [Avoid strftime in awk for BSD/macOS Compatibility]
+**Learning:** In BSD awk (e.g. One True Awk on macOS), calling `strftime` results in a fatal compile-time syntax error because BSD awk completely lacks support for `strftime`. When processing file modification times (mtimes), formatting the timestamp in standard utility calls (like BSD stat's `-t "%Y%m%d.%H%M%S"` or GNU stat's string manipulation) avoids these compatibility crashes while maintaining O(N) performance.
+**Action:** Do not use `strftime` inside `awk` blocks. Instead, pass already formatted strings from `stat` (such as `stat -f %Sm -t %Y%m%d.%H%M%S` on BSD) or use substring extraction on GNU stat output (`stat -c %y`) to format timestamps reliably across environments.

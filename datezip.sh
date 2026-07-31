@@ -510,18 +510,57 @@ execute_status() {
     # Modified: In both, check mtime
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        # ⚡ Optimization: Avoid spawning grep/date/stat processes inside an O(N) loop.
+        # Instead, batch query the file modification times via xargs stat, auto-detecting
+        # GNU vs BSD stat formats, and compare cached/current times in a single O(N) awk process.
+        local stat_output=""
+        if stat --version >/dev/null 2>&1; then
+            # GNU stat formatting: print modification time and filename separated by |
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -c "%y|%n" --)
+        else
+            # BSD stat formatting: print formatted modification time and filename separated by |
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" --)
+        fi
+
+        local modified=$(echo "$stat_output" | awk '
+            FILENAME == ARGV[1] {
+                # Load tmp_latest: filename|cached_mtime.
+                # Handle filenames containing pipe characters by matching the last pipe.
+                pos = match($0, /\|[^|]*$/)
+                if (pos > 0) {
+                    f = substr($0, 1, pos - 1)
+                    mtime = substr($0, pos + 1)
+                    sub(/^\.\//, "", f) # Symmetrically strip leading ./ for robust matching
+                    cached[f] = mtime
+                }
+                next
+            }
+            {
+                # Parse stat output: current_mtime_part|filename
+                pos = index($0, "|")
+                if (pos > 0) {
+                    mtime_part = substr($0, 1, pos - 1)
+                    f = substr($0, pos + 1)
+                    sub(/^\.\//, "", f) # Symmetrically strip leading ./ for robust matching
+
+                    # If GNU stat format (contains -), convert YYYY-MM-DD HH:MM:SS to YYYYMMDD.HHMMSS
+                    if (mtime_part ~ /-/) {
+                        mtime = substr(mtime_part, 1, 4) substr(mtime_part, 6, 2) substr(mtime_part, 9, 2) "." substr(mtime_part, 12, 2) substr(mtime_part, 15, 2) substr(mtime_part, 18, 2)
+                    } else {
+                        mtime = mtime_part
+                    }
+
+                    if (f in cached && cached[f] != mtime) {
+                        print f
+                    }
+                }
+            }
+        ' "$tmp_latest" -)
+
+        if [[ -n "$modified" ]]; then
+            echo "Modified:"
+            sed 's/^/  . /' <<< "$modified"
+        fi
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
