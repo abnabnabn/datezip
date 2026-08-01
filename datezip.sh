@@ -507,21 +507,51 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime using a single O(N) batch query
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local stat_output
+        if stat --version >/dev/null 2>&1; then
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -c "%y|%n" -- 2>/dev/null)
+        else
+            stat_output=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" -- 2>/dev/null)
+        fi
+
+        # Compare the cached history state against the current filesystem state in O(N)
+        awk -F'|' '
+        NR == FNR {
+            # Processing $tmp_latest (cached history state)
+            filename = $1
+            sub(/^\.\//, "", filename)
+            cached[filename] = $2
+            next
+        }
+        {
+            # Processing stat_output
+            first_pipe = index($0, "|")
+            if (first_pipe == 0) next
+            mtime_part = substr($0, 1, first_pipe - 1)
+            filename = substr($0, first_pipe + 1)
+            sub(/^\.\//, "", filename)
+
+            # Format mtime part if GNU stat format is used
+            if (mtime_part ~ /-/) {
+                gnu_date = substr(mtime_part, 1, 19)
+                current_mtime = substr(gnu_date, 1, 4) substr(gnu_date, 6, 2) substr(gnu_date, 9, 2) "." substr(gnu_date, 12, 2) substr(gnu_date, 15, 2) substr(gnu_date, 18, 2)
+            } else {
+                current_mtime = mtime_part
+            }
+
+            if (filename in cached) {
+                if (cached[filename] != current_mtime) {
+                    if (!first_modified_printed) {
+                        print "Modified:"
+                        first_modified_printed = 1
+                    }
+                    print "  . " filename
+                }
+            }
+        }' "$tmp_latest" <(printf "%s\n" "$stat_output")
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
