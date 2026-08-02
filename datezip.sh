@@ -466,11 +466,14 @@ execute_status() {
     
     local tmp_latest=$(mktemp 2>/dev/null || mktemp -t 'datezip')
     # Reconstruct state exactly as it was at that FULL backup by scanning history
+    # Symmetrically strip leading ./ from filenames to ensure consistency
     awk -F'|' -v target="$latest_full_ts" '
     $1 <= target {
         if ($2 == "*") next
-        state[$4] = $2
-        mtime[$4] = $3
+        f = $4
+        sub(/^\.\//, "", f)
+        state[f] = $2
+        mtime[f] = $3
     }
     END {
         for (f in state) {
@@ -507,21 +510,77 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime. Optimized using batched stat and O(N) awk.
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        if stat --version 2>/dev/null | grep -q "GNU"; then
+            # GNU stat: Batch format %y|%n with -- flag terminator
+            echo "$common" | tr '\n' '\0' | xargs -0 stat -c "%y|%n" -- 2>/dev/null | awk -v tmp_latest="$tmp_latest" '
+            BEGIN {
+                first_modified = 1
+                while ((getline < tmp_latest) > 0) {
+                    idx = match($0, /\|[^|]*$/)
+                    if (idx > 0) {
+                        f = substr($0, 1, idx - 1)
+                        m = substr($0, idx + 1)
+                        sub(/^\.\//, "", f)
+                        cached_mtimes[f] = m
+                    }
+                }
+                close(tmp_latest)
+            }
+            {
+                idx = index($0, "|")
+                if (idx > 0) {
+                    mtime_str = substr($0, 1, idx - 1)
+                    f = substr($0, idx + 1)
+                    sub(/^\.\//, "", f)
+                    curr_mtime = substr(mtime_str, 1, 4) substr(mtime_str, 6, 2) substr(mtime_str, 9, 2) "." substr(mtime_str, 12, 2) substr(mtime_str, 15, 2) substr(mtime_str, 18, 2)
+                    if (f in cached_mtimes) {
+                        if (curr_mtime != cached_mtimes[f]) {
+                            if (first_modified) {
+                                print "Modified:"
+                                first_modified = 0
+                            }
+                            print "  . " f
+                        }
+                    }
+                }
+            }'
+        else
+            # BSD/macOS stat: Batch format %Sm|%N with -t %Y%m%d.%H%M%S and -- flag terminator
+            echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" -- 2>/dev/null | awk -v tmp_latest="$tmp_latest" '
+            BEGIN {
+                first_modified = 1
+                while ((getline < tmp_latest) > 0) {
+                    idx = match($0, /\|[^|]*$/)
+                    if (idx > 0) {
+                        f = substr($0, 1, idx - 1)
+                        m = substr($0, idx + 1)
+                        sub(/^\.\//, "", f)
+                        cached_mtimes[f] = m
+                    }
+                }
+                close(tmp_latest)
+            }
+            {
+                idx = index($0, "|")
+                if (idx > 0) {
+                    curr_mtime = substr($0, 1, idx - 1)
+                    f = substr($0, idx + 1)
+                    sub(/^\.\//, "", f)
+                    if (f in cached_mtimes) {
+                        if (curr_mtime != cached_mtimes[f]) {
+                            if (first_modified) {
+                                print "Modified:"
+                                first_modified = 0
+                            }
+                            print "  . " f
+                        }
+                    }
+                }
+            }'
+        fi
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
