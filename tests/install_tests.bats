@@ -69,6 +69,12 @@ teardown() {
     [[ "$output" == *"Checking system dependencies..."* ]]
 }
 
+@test "install rejects target directory starting with a hyphen" {
+    run "$INSTALL_SCRIPT" "-malicious-dir"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Target directory cannot start with a hyphen"* ]]
+}
+
 @test "remove legacy binary" {
     # Mock legacy path directory
     LEGACY_DIR="$TEST_WORKSPACE/usr/bin"
