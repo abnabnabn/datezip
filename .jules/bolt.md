@@ -1,0 +1,7 @@
+# Bolt Performance Journal
+
+This is the journal of Bolt ⚡, where critical performance-specific learnings and findings for this codebase are documented.
+
+## 2026-08-03 - [Sequential file querying vs Batched stat via xargs & O(N) awk lookup]
+**Learning:** Sequential disk metadata reads (`date -r` or `stat`) inside shell loops are extremely expensive and represent a major bottleneck (causing 170x+ slowdown with large numbers of files, such as 5,000 files taking >43s vs ~0.25s). Batching path resolution with `xargs stat --` and then evaluating in a single O(N) lookup in `awk` using associative arrays completely eliminates this overhead. However, standard BSD awk (like One True Awk on macOS) lacks `strftime` support entirely, causing syntax/compilation errors or crashes if used within awk blocks. To overcome this limitation, BSD stat must format the timestamp directly (`stat -f %Sm -t %Y%m%d.%H%M%S`) while GNU stat's raw timestamp format must be parsed inside `awk` using POSIX-compliant string manipulation functions (`split`, `gsub`, etc.).
+**Action:** Always batch file system queries using `xargs stat --` with appropriate options. Use system-level detection (`stat --version`) to output the correct command and parse the date/time string in POSIX-compliant portable `awk` instead of invoking `strftime` within the awk script. Always symmetrically strip any path prefixes (e.g. `./`) during lookup key matches to ensure exact string matching.

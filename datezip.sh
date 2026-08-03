@@ -508,20 +508,67 @@ execute_status() {
     fi
     
     # Modified: In both, check mtime
+    # Bolt Optimization: Batch file metadata querying via xargs stat & O(N) awk lookup to avoid 170x sequential loop bottleneck.
+    # We detect GNU vs BSD stat and format/parse the output directly to prevent crashes on macOS (missing strftime in awk).
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local is_gnu=0
+        if stat --version >/dev/null 2>&1; then
+            is_gnu=1
+        fi
+
+        local modified_files
+        if [[ "$is_gnu" -eq 1 ]]; then
+            modified_files=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -c "%y|%n" -- | awk -F'|' -v is_gnu=1 '
+            NR == FNR {
+                f = $1
+                sub(/^\.\//, "", f)
+                cached_mtime[f] = $2
+                next
+            }
+            {
+                raw_mtime = $1
+                f = $2
+                sub(/^\.\//, "", f)
+
+                # Parse GNU raw mtime (e.g. 2026-08-03 12:39:17.222897203 +0000) into YYYYMMDD.HHMMSS
+                split(raw_mtime, parts, " ")
+                date_part = parts[1]
+                time_part = parts[2]
+                gsub(/-/, "", date_part)
+                split(time_part, subparts, ".")
+                hms = subparts[1]
+                gsub(/:/, "", hms)
+                current_mtime = date_part "." hms
+
+                if (f in cached_mtime && cached_mtime[f] != "" && current_mtime != cached_mtime[f]) {
+                    print f
+                }
+            }' "$tmp_latest" - | sort)
+        else
+            modified_files=$(echo "$common" | tr '\n' '\0' | xargs -0 stat -f "%Sm|%N" -t "%Y%m%d.%H%M%S" -- | awk -F'|' -v is_gnu=0 '
+            NR == FNR {
+                f = $1
+                sub(/^\.\//, "", f)
+                cached_mtime[f] = $2
+                next
+            }
+            {
+                raw_mtime = $1
+                f = $2
+                sub(/^\.\//, "", f)
+                current_mtime = raw_mtime
+
+                if (f in cached_mtime && cached_mtime[f] != "" && current_mtime != cached_mtime[f]) {
+                    print f
+                }
+            }' "$tmp_latest" - | sort)
+        fi
+
+        if [[ -n "$modified_files" ]]; then
+            echo "Modified:"
+            sed 's/^/  . /' <<< "$modified_files"
+        fi
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
