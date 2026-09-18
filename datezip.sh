@@ -522,20 +522,12 @@ execute_status() {
 
     local modified_files=$(awk -F'|' '
     NR==FNR {
-        file = $1
-        for (i = 2; i < NF; i++) {
-            file = file "|" $i
-        }
-        cached[file] = $NF
+        cached[$1] = $2
         next
     }
     {
-        file = $1
-        for (i = 2; i < NF; i++) {
-            file = file "|" $i
-        }
-        if (file in cached && cached[file] != $NF) {
-            print file
+        if ($1 in cached && cached[$1] != $2) {
+            print $1
         }
     }' "$tmp_latest" "$tmp_current")
 
