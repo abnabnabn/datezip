@@ -415,3 +415,30 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --restore-type requires 'e' or 'j'"* ]]
 }
+
+@test "validation rejects --dest and --files starting with a hyphen" {
+    run "$DATEZIP" --restore-index 0 --dest '-bad_dest'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files '-bad_files'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+}
+
+@test "status command handles files with special characters and spaces" {
+    echo "content1" > "file [1].txt"
+    echo "content2" > "file with spaces.txt"
+    "$DATEZIP" --full --quiet
+
+    sleep 1
+    echo "modified1" > "file [1].txt"
+    echo "modified2" > "file with spaces.txt"
+
+    run "$DATEZIP" --status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Modified:"* ]]
+    [[ "$output" == *". file [1].txt"* ]]
+    [[ "$output" == *". file with spaces.txt"* ]]
+}
+

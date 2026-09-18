@@ -104,8 +104,14 @@ parse_args() {
                 # Security: Strict validation of type values to prevent argument injection
                 [[ ! "$RESTORE_TYPE" =~ ^[eEjJ]$ ]] && { echo "Error: --restore-type requires 'e' or 'j'" >&2; exit 1; }
                 ;;
-            --dest) RESTORE_DEST="$2"; shift ;;
-            --files) RESTORE_FILES="$2"; shift ;;
+            --dest)
+                RESTORE_DEST="$2"; shift
+                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                ;;
+            --files)
+                RESTORE_FILES="$2"; shift
+                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
                 HISTORY_LIMIT="$2"; shift
@@ -507,21 +513,68 @@ execute_status() {
         sed 's/^/  ? /' <<< "$untracked"
     fi
     
-    # Modified: In both, check mtime
+    # Modified: In both, check mtime.
+    # Batch file metadata queries via xargs stat into tmp_stat, then compare
+    # against cached mtimes using an O(N) awk in-memory hash table.
     local common=$(comm -12 <(cut -d'|' -f1 "$tmp_latest") "$tmp_disk")
     if [[ -n "$common" ]]; then
-        local first_modified=true
-        while IFS= read -r f; do
-            [[ -z "$f" ]] && continue
-            # Get latest mtime from cache - anchored to start of line
-            local cached_mtime=$(grep "^$f|" "$tmp_latest" | cut -d'|' -f2)
-            # Get current mtime
-            local current_mtime=$(date -r "$f" +"%Y%m%d.%H%M%S" 2>/dev/null || stat -f "%Sm" -t "%Y%m%d.%H%M%S" "$f" 2>/dev/null)
-            if [[ -n "$cached_mtime" && "$current_mtime" != "$cached_mtime" ]]; then
-                [[ "$first_modified" == true ]] && { echo "Modified:"; first_modified=false; }
-                echo "  . $f"
-            fi
-        done <<< "$common"
+        local is_gnu=false
+        if stat -c "%y" . >/dev/null 2>&1; then
+            is_gnu=true
+        fi
+
+        local tmp_stat=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+
+        # Security: Terminate option flags with `--` to protect against argument injection.
+        # Use %n for raw filename across both GNU and BSD stat.
+        if [[ "$is_gnu" == true ]]; then
+            tr '\n' '\0' <<< "$common" | xargs -0 stat -c "%y|%n" -- > "$tmp_stat" 2>/dev/null || true
+        else
+            tr '\n' '\0' <<< "$common" | xargs -0 stat -f "%Sm|%n" -t "%Y%m%d.%H%M%S" -- > "$tmp_stat" 2>/dev/null || true
+        fi
+
+        # Compare timestamps using awk safely (avoiding BSD-awk strftime runtime limitations).
+        # Symmetrically strip leading `./` from filenames to ensure exact matching consistency.
+        local modified_files=$(awk -F'|' -v is_gnu="$is_gnu" '
+        FILENAME == ARGV[1] {
+            f_clean = $1
+            sub(/^\.\//, "", f_clean)
+            cached_mtimes[f_clean] = $2
+            next
+        }
+        {
+            idx = index($0, "|")
+            if (idx == 0) next
+            raw_mtime = substr($0, 1, idx - 1)
+            fname = substr($0, idx + 1)
+
+            if (is_gnu == "true") {
+                # Format "YYYY-MM-DD HH:MM:SS.NNNNNNNNN +ZZZZ" to "YYYYMMDD.HHMMSS"
+                dt = substr(raw_mtime, 1, 10)
+                gsub("-", "", dt)
+                tm = substr(raw_mtime, 12, 8)
+                gsub(":", "", tm)
+                mtime = dt "." tm
+            } else {
+                mtime = raw_mtime
+            }
+
+            f_clean = fname
+            sub(/^\.\//, "", f_clean)
+
+            if (f_clean in cached_mtimes) {
+                if (cached_mtimes[f_clean] != mtime) {
+                    print fname
+                }
+            }
+        }' "$tmp_latest" "$tmp_stat")
+
+        if [[ -n "$modified_files" ]]; then
+            echo "Modified:"
+            sed 's/^/  . /' <<< "$modified_files"
+        fi
+
+        rm -f "$tmp_stat"
     fi
     
     rm -f "$tmp_latest" "$tmp_disk"
@@ -613,7 +666,7 @@ execute_restore() {
         read -r -p "Restore [E]verything or [J]ust increment? (e/j): " mode
     fi
     
-    mkdir -p "$RESTORE_DEST"
+    mkdir -p -- "$RESTORE_DEST"
     log "Restoring to $RESTORE_DEST..."
     if [[ "$mode" =~ ^[Ee]$ ]]; then
         local start_idx=0
@@ -657,7 +710,7 @@ execute_cleanup() {
         for inc in "${incs[@]}"; do 
             if [[ "$inc" < "$latest" ]]; then 
                 log "Deleting: $(basename "$inc")"
-                rm -f "$inc"
+                rm -f -- "$inc"
             fi
         done
     fi
