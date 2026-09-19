@@ -10,3 +10,8 @@ This is the journal of Sentinel, where critical security learnings specific to t
 **Vulnerability:** Option/argument injection via user-supplied paths/files starting with a hyphen, and potential regex injection inside loop lookup logic in `execute_status`.
 **Learning:** Utilities like `mkdir`, `cp`, `ln`, `chmod`, and `rm` can have their option-parsing hijacked if target file paths or directories start with a hyphen (`-`). Similarly, using `grep` with unescaped variable input interprets regex control characters inside filenames, leading to incorrect matches.
 **Prevention:** Explicitly validate user-supplied paths and files to ensure they do not start with a hyphen (`-`) and append `--` to separate options from positional arguments in system utility calls. For status file matching, use exact hash lookups (via `awk`) rather than sequential regex grep.
+
+## 2026-07-22 - [Option Injection in Comma-Separated List Parameters]
+**Vulnerability:** Option injection via comma-separated elements in `--files` parameter. Validating only the entire string parameter using `[[ "$RESTORE_FILES" =~ ^- ]]` missed malicious hyphen-prefixed filenames placed after a comma (e.g. `--files "valid.txt,-option"`).
+**Learning:** When command arguments are unpacked from comma-separated lists into array elements or separate arguments for downstream external utilities (like `unzip`), checking only the start of the full input string allows subsequent elements to bypass leading-hyphen validation.
+**Prevention:** Split delimiter-separated list inputs during argument parsing and iterate over each item to validate that no element begins with a hyphen before allowing command execution.
