@@ -315,7 +315,10 @@ update_history_cache() {
         if [[ ${#new_zips[@]} -gt 0 ]]; then
             log "Updating history cache with ${#new_zips[@]} new backup(s)..."
             for zip in "${new_zips[@]}"; do
-                local ts=$(basename "$zip" | cut -d'_' -f2,3)
+                # Fast in-process timestamp extraction from filename (datezip_YYYYMMDD_HHMMSS_TYPE.zip)
+                local zip_fn="${zip##*/}"
+                local ts="${zip_fn#datezip_}"
+                ts="${ts%_*.zip}"
                 echo "${ts}|*|00000000.000000|__MARKER__"
                 unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
                 match($0, /[0-9]{8}\.[0-9]{6}/) {
@@ -366,7 +369,10 @@ execute_reindex() {
     while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
     
     for zip in "${sorted[@]}"; do
-        local ts=$(basename "$zip" | cut -d'_' -f2,3)
+        # Fast in-process timestamp extraction from filename
+        local zip_fn="${zip##*/}"
+        local ts="${zip_fn#datezip_}"
+        ts="${ts%_*.zip}"
         echo "${ts}|*|00000000.000000|__MARKER__"
         unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
         match($0, /[0-9]{8}\.[0-9]{6}/) {
@@ -586,7 +592,9 @@ execute_backup() {
     local b_type="FULL"
     local today=$(date +"%Y%m%d")
     if last_backup=$(get_latest_backup); then
-        local ts_part=$(basename "$last_backup" | cut -d'_' -f2)
+        local lb_fn="${last_backup##*/}"
+        local ts_part="${lb_fn#datezip_}"
+        ts_part="${ts_part%%_*}"
         [[ "$ts_part" == "$today" ]] && b_type="INC"
     fi
     [[ -n "$FORCE_TYPE" ]] && b_type="$FORCE_TYPE"
@@ -644,7 +652,9 @@ execute_restore() {
     local choice="$RESTORE_INDEX"
     if [[ -n "$RESTORE_TIME" ]]; then
         for ((i=${#sorted[@]}-1; i>=0; i--)); do
-            local b_ts=$(basename "${sorted[$i]}" | cut -d'_' -f2,3)
+            local b_fn="${sorted[$i]##*/}"
+            local b_ts="${b_fn#datezip_}"
+            b_ts="${b_ts%_*.zip}"
             if [[ "$b_ts" < "$RESTORE_TIME" || "$b_ts" == "$RESTORE_TIME" ]]; then choice=$i; break; fi
         done
         [[ -z "$choice" ]] && { echo "Error: No backup before $RESTORE_TIME" >&2; exit 1; }
@@ -719,8 +729,9 @@ execute_cleanup() {
     if [[ $cutoff -gt 0 ]]; then
         for (( i=0; i<cutoff; i++ )); do
             local f="${s_full[$i]}"
-            local f_ts
-            f_ts=$(basename "$f" | cut -d'_' -f2,3)
+            local f_fn="${f##*/}"
+            local f_ts="${f_fn#datezip_}"
+            f_ts="${f_ts%_*.zip}"
             # Prune ONLY if it's outside the KEEP_FULL window AND outside the KEEP_DAYS window
             # This implements the "whichever rule yields the larger retention set" logic.
             if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
