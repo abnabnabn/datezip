@@ -315,7 +315,10 @@ update_history_cache() {
         if [[ ${#new_zips[@]} -gt 0 ]]; then
             log "Updating history cache with ${#new_zips[@]} new backup(s)..."
             for zip in "${new_zips[@]}"; do
-                local ts=$(basename "$zip" | cut -d'_' -f2,3)
+                # Performance optimization: Use pure Bash parameter expansion to avoid subshell process fork overhead
+                local fname="${zip##*/}"
+                local ts="${fname#datezip_}"
+                ts="${ts%_*.zip}"
                 echo "${ts}|*|00000000.000000|__MARKER__"
                 unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
                 match($0, /[0-9]{8}\.[0-9]{6}/) {
@@ -366,7 +369,10 @@ execute_reindex() {
     while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
     
     for zip in "${sorted[@]}"; do
-        local ts=$(basename "$zip" | cut -d'_' -f2,3)
+        # Performance optimization: Use pure Bash parameter expansion to avoid subshell process fork overhead
+        local fname="${zip##*/}"
+        local ts="${fname#datezip_}"
+        ts="${ts%_*.zip}"
         echo "${ts}|*|00000000.000000|__MARKER__"
         unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
         match($0, /[0-9]{8}\.[0-9]{6}/) {
@@ -441,7 +447,8 @@ execute_history() {
             if [[ "$ts" != "$current_ts" ]]; then
                 [[ -n "$current_ts" ]] && echo ""
                 local b_type="INC"
-                if ls "$BACKUP_DIR_NAME"/datezip_${ts}_*.zip 2>/dev/null | grep -q "_FULL.zip"; then
+                # Performance optimization: Use pure Bash file test instead of subshell execution (ls | grep)
+                if [[ -f "$BACKUP_DIR_NAME/datezip_${ts}_FULL.zip" ]]; then
                     b_type="FULL"
                 fi
                 echo "---- ${ts} (${b_type}) --------"
@@ -460,8 +467,17 @@ execute_status() {
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available. Run a backup first."; return 0; }
     
     # Delta from Baseline Model: Find the latest FULL backup timestamp
-    # We grep for _FULL.zip in the backup directory and extract the timestamp
-    local latest_full_ts=$(ls "$BACKUP_DIR_NAME"/datezip_*_FULL.zip 2>/dev/null | tail -n 1 | cut -d'_' -f2,3 | cut -d'.' -f1)
+    # Performance optimization: Use pure Bash globbing and parameter expansion instead of subshell process spawning
+    shopt -s nullglob
+    local full_backups=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
+    shopt -u nullglob
+    local latest_full_ts=""
+    if [[ ${#full_backups[@]} -gt 0 ]]; then
+        local latest_full="${full_backups[-1]}"
+        local fname="${latest_full##*/}"
+        latest_full_ts="${fname#datezip_}"
+        latest_full_ts="${latest_full_ts%_FULL.zip}"
+    fi
     
     if [[ -z "$latest_full_ts" ]]; then
         # Fallback to the very first entry if no FULL found (shouldn't happen)
@@ -586,7 +602,10 @@ execute_backup() {
     local b_type="FULL"
     local today=$(date +"%Y%m%d")
     if last_backup=$(get_latest_backup); then
-        local ts_part=$(basename "$last_backup" | cut -d'_' -f2)
+        # Performance optimization: Use pure Bash parameter expansion instead of subshell process fork
+        local fname="${last_backup##*/}"
+        local ts_part="${fname#datezip_}"
+        ts_part="${ts_part%%_*}"
         [[ "$ts_part" == "$today" ]] && b_type="INC"
     fi
     [[ -n "$FORCE_TYPE" ]] && b_type="$FORCE_TYPE"
@@ -629,7 +648,7 @@ execute_list() {
     local sorted=()
     while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
     echo "Available backups:"
-    for i in "${!sorted[@]}"; do echo "[$i] $(basename "${sorted[$i]}")"; done
+    for i in "${!sorted[@]}"; do echo "[$i] ${sorted[$i]##*/}"; done
 }
 
 execute_restore() {
@@ -644,7 +663,10 @@ execute_restore() {
     local choice="$RESTORE_INDEX"
     if [[ -n "$RESTORE_TIME" ]]; then
         for ((i=${#sorted[@]}-1; i>=0; i--)); do
-            local b_ts=$(basename "${sorted[$i]}" | cut -d'_' -f2,3)
+            # Performance optimization: Use pure Bash parameter expansion to avoid subshell process fork
+            local fname="${sorted[$i]##*/}"
+            local b_ts="${fname#datezip_}"
+            b_ts="${b_ts%_*.zip}"
             if [[ "$b_ts" < "$RESTORE_TIME" || "$b_ts" == "$RESTORE_TIME" ]]; then choice=$i; break; fi
         done
         [[ -z "$choice" ]] && { echo "Error: No backup before $RESTORE_TIME" >&2; exit 1; }
@@ -672,7 +694,7 @@ execute_restore() {
         local start_idx=0
         for ((i=choice; i>=0; i--)); do [[ "${sorted[$i]}" == *"_FULL.zip" ]] && { start_idx=$i; break; }; done
         for ((i=start_idx; i<=choice; i++)); do
-            log "Extracting $(basename "${sorted[$i]}")"
+            log "Extracting ${sorted[$i]##*/}"
             local cmd=("unzip" "-o" "-q" "${sorted[$i]}")
             [[ ${#target_files[@]} -gt 0 ]] && cmd+=("${target_files[@]}")
             cmd+=("-d" "$RESTORE_DEST")
@@ -709,7 +731,7 @@ execute_cleanup() {
         local latest="${s_full[$((num_f - 1))]}"
         for inc in "${incs[@]}"; do 
             if [[ "$inc" < "$latest" ]]; then 
-                log "Deleting: $(basename "$inc")"
+                log "Deleting: ${inc##*/}"
                 rm -f -- "$inc"
             fi
         done
@@ -719,12 +741,14 @@ execute_cleanup() {
     if [[ $cutoff -gt 0 ]]; then
         for (( i=0; i<cutoff; i++ )); do
             local f="${s_full[$i]}"
-            local f_ts
-            f_ts=$(basename "$f" | cut -d'_' -f2,3)
+            # Performance optimization: Use pure Bash parameter expansion to avoid subshell process fork
+            local fname="${f##*/}"
+            local f_ts="${fname#datezip_}"
+            f_ts="${f_ts%_*.zip}"
             # Prune ONLY if it's outside the KEEP_FULL window AND outside the KEEP_DAYS window
             # This implements the "whichever rule yields the larger retention set" logic.
             if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
-                log "Deleting: $(basename "$f")"
+                log "Deleting: ${f##*/}"
                 rm -f "$f"
             fi
         done
