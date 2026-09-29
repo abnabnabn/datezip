@@ -423,7 +423,11 @@ teardown() {
 
     run "$DATEZIP" --restore-index 0 --files '-bad_files'
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+    [[ "$output" == *"Error: --files cannot contain items starting with a hyphen"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files 'file1.txt,-bad_files'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot contain items starting with a hyphen"* ]]
 }
 
 @test "status command handles files with special characters and spaces" {
