@@ -110,7 +110,12 @@ parse_args() {
                 ;;
             --files)
                 RESTORE_FILES="$2"; shift
-                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                # Security: Validate each item in comma-separated file list to prevent option injection in downstream tools (e.g., unzip)
+                IFS=',' read -ra _f_list <<< "$RESTORE_FILES"
+                for _f in "${_f_list[@]}"; do
+                    _f_trimmed="${_f#"${_f%%[![:space:]]*}"}"
+                    [[ "$_f_trimmed" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                done
                 ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
