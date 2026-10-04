@@ -280,7 +280,14 @@ update_history_cache() {
         return 0
     fi
 
-    local actual_ts_list=$(printf "%s\n" "${backups[@]}" | awk -F'_' '{print $2"_"$3}' | awk -F'.' '{print $1}' | sort -u)
+    # Performance: Extract timestamps using pure Bash parameter expansion (${b##*/})
+    # to avoid subshell forks and prevent path parsing bugs with dots/underscores in dir names.
+    local actual_ts_list
+    actual_ts_list=$(for b in "${backups[@]}"; do
+        local fname="${b##*/}"
+        local rest="${fname#datezip_}"
+        echo "${rest%_*.zip}"
+    done | sort -u)
     local cached_ts_list=$(awk -F'|' '{print $1}' "$HISTORY_CACHE_FILE" | sort -u)
 
     if [[ -z "$cached_ts_list" ]]; then
@@ -314,17 +321,15 @@ update_history_cache() {
 
         if [[ ${#new_zips[@]} -gt 0 ]]; then
             log "Updating history cache with ${#new_zips[@]} new backup(s)..."
+            # Performance Optimization: Stream unzip -Z -T for all new zip files into a single
+            # AWK process, using pure Bash parameter expansion (${zip##*/}) to extract timestamps
+            # without per-file subshell forks (basename/cut).
             for zip in "${new_zips[@]}"; do
-                local ts=$(basename "$zip" | cut -d'_' -f2,3)
-                echo "${ts}|*|00000000.000000|__MARKER__"
-                unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
-                match($0, /[0-9]{8}\.[0-9]{6}/) {
-                    mtime = substr($0, RSTART, RLENGTH)
-                    rest = substr($0, RSTART + RLENGTH)
-                    sub(/^ +/, "", rest)
-                    if (rest ~ /\/$/) next
-                    printf "%s||%s|%s\n", zts, mtime, rest
-                }'
+                local fname="${zip##*/}"
+                local rest="${fname#datezip_}"
+                local ts="${rest%_*.zip}"
+                echo "===ZIP:${ts}==="
+                unzip -Z -T "$zip" 2>/dev/null
             done | awk -F'|' -v OFS='|' -v cache="$HISTORY_CACHE_FILE" '
             BEGIN {
                 while ((getline < cache) > 0) {
@@ -333,12 +338,19 @@ update_history_cache() {
                 }
                 close(cache)
             }
-            {
-                if ($2 == "*") {
-                    print $0 >> cache
-                    next
-                }
-                zts = $1; mtime = $3; file = $4
+            /^===ZIP:/ {
+                zts = $0
+                sub(/^===ZIP:/, "", zts)
+                sub(/===$/, "", zts)
+                print zts "|*|00000000.000000|__MARKER__" >> cache
+                next
+            }
+            match($0, /[0-9]{8}\.[0-9]{6}/) {
+                mtime = substr($0, RSTART, RLENGTH)
+                file = substr($0, RSTART + RLENGTH)
+                sub(/^ +/, "", file)
+                if (file ~ /\/$/) next
+
                 if (!(file in seen)) {
                     print zts, "+", mtime, file >> cache
                     seen[file] = mtime
@@ -365,24 +377,29 @@ execute_reindex() {
     local sorted=()
     while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
     
+    # Performance Optimization: Consolidate archive inspection and cache building into a single
+    # AWK stream. Pure Bash parameter expansion (${zip##*/}) strips path prefixes and suffixes,
+    # eliminating subshell process forks (basename/cut) for every backup archive.
     for zip in "${sorted[@]}"; do
-        local ts=$(basename "$zip" | cut -d'_' -f2,3)
-        echo "${ts}|*|00000000.000000|__MARKER__"
-        unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
-        match($0, /[0-9]{8}\.[0-9]{6}/) {
-            mtime = substr($0, RSTART, RLENGTH)
-            rest = substr($0, RSTART + RLENGTH)
-            sub(/^ +/, "", rest)
-            if (rest ~ /\/$/) next
-            printf "%s||%s|%s\n", zts, mtime, rest
-        }'
+        local fname="${zip##*/}"
+        local rest="${fname#datezip_}"
+        local ts="${rest%_*.zip}"
+        echo "===ZIP:${ts}==="
+        unzip -Z -T "$zip" 2>/dev/null
     done | awk -F'|' -v OFS='|' '
-    {
-        if ($2 == "*") {
-            print $0
-            next
-        }
-        zts = $1; mtime = $3; file = $4
+    /^===ZIP:/ {
+        zts = $0
+        sub(/^===ZIP:/, "", zts)
+        sub(/===$/, "", zts)
+        print zts "|*|00000000.000000|__MARKER__"
+        next
+    }
+    match($0, /[0-9]{8}\.[0-9]{6}/) {
+        mtime = substr($0, RSTART, RLENGTH)
+        file = substr($0, RSTART + RLENGTH)
+        sub(/^ +/, "", file)
+        if (file ~ /\/$/) next
+
         if (!(file in seen)) {
             print zts, "+", mtime, file
             seen[file] = mtime
@@ -460,8 +477,16 @@ execute_status() {
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available. Run a backup first."; return 0; }
     
     # Delta from Baseline Model: Find the latest FULL backup timestamp
-    # We grep for _FULL.zip in the backup directory and extract the timestamp
-    local latest_full_ts=$(ls "$BACKUP_DIR_NAME"/datezip_*_FULL.zip 2>/dev/null | tail -n 1 | cut -d'_' -f2,3 | cut -d'.' -f1)
+    shopt -s nullglob
+    local full_zips=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
+    shopt -u nullglob
+    local latest_full_ts=""
+    if [[ ${#full_zips[@]} -gt 0 ]]; then
+        local last_full="${full_zips[-1]}"
+        local fname="${last_full##*/}"
+        local rest="${fname#datezip_}"
+        latest_full_ts="${rest%_FULL.zip}"
+    fi
     
     if [[ -z "$latest_full_ts" ]]; then
         # Fallback to the very first entry if no FULL found (shouldn't happen)
@@ -586,7 +611,9 @@ execute_backup() {
     local b_type="FULL"
     local today=$(date +"%Y%m%d")
     if last_backup=$(get_latest_backup); then
-        local ts_part=$(basename "$last_backup" | cut -d'_' -f2)
+        local fname="${last_backup##*/}"
+        local rest="${fname#datezip_}"
+        local ts_part="${rest%%_*}"
         [[ "$ts_part" == "$today" ]] && b_type="INC"
     fi
     [[ -n "$FORCE_TYPE" ]] && b_type="$FORCE_TYPE"
@@ -644,7 +671,9 @@ execute_restore() {
     local choice="$RESTORE_INDEX"
     if [[ -n "$RESTORE_TIME" ]]; then
         for ((i=${#sorted[@]}-1; i>=0; i--)); do
-            local b_ts=$(basename "${sorted[$i]}" | cut -d'_' -f2,3)
+            local fname="${sorted[$i]##*/}"
+            local rest="${fname#datezip_}"
+            local b_ts="${rest%_*.zip}"
             if [[ "$b_ts" < "$RESTORE_TIME" || "$b_ts" == "$RESTORE_TIME" ]]; then choice=$i; break; fi
         done
         [[ -z "$choice" ]] && { echo "Error: No backup before $RESTORE_TIME" >&2; exit 1; }
@@ -719,8 +748,9 @@ execute_cleanup() {
     if [[ $cutoff -gt 0 ]]; then
         for (( i=0; i<cutoff; i++ )); do
             local f="${s_full[$i]}"
-            local f_ts
-            f_ts=$(basename "$f" | cut -d'_' -f2,3)
+            local fname="${f##*/}"
+            local rest="${fname#datezip_}"
+            local f_ts="${rest%_FULL.zip}"
             # Prune ONLY if it's outside the KEEP_FULL window AND outside the KEEP_DAYS window
             # This implements the "whichever rule yields the larger retention set" logic.
             if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
