@@ -110,7 +110,10 @@ parse_args() {
                 ;;
             --files)
                 RESTORE_FILES="$2"; shift
-                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                IFS=',' read -ra _f_items <<< "$RESTORE_FILES"
+                for _f_item in "${_f_items[@]}"; do
+                    [[ "$_f_item" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                done
                 ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
