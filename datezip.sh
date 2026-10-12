@@ -265,7 +265,8 @@ get_latest_backup() {
     local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
     [[ ${#backups[@]} -eq 0 ]] && return 1
-    printf "%s\n" "${backups[@]}" | sort | tail -n 1
+    # Bash glob expansion is naturally sorted chronologically
+    echo "${backups[-1]}"
 }
 
 update_history_cache() {
@@ -362,11 +363,11 @@ execute_reindex() {
     shopt -u nullglob
     [[ ${#backups[@]} -eq 0 ]] && return 0
     
-    local sorted=()
-    while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
-    
-    for zip in "${sorted[@]}"; do
-        local ts=$(basename "$zip" | cut -d'_' -f2,3)
+    # Bash glob expansion is naturally sorted chronologically
+    for zip in "${backups[@]}"; do
+        local fname="${zip##*/}"
+        local ts="${fname#datezip_}"
+        ts="${ts%_*.zip}"
         echo "${ts}|*|00000000.000000|__MARKER__"
         unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
         match($0, /[0-9]{8}\.[0-9]{6}/) {
@@ -399,60 +400,66 @@ execute_history() {
     update_history_cache
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available."; return 0; }
     
-    local tmp_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-    while IFS='|' read -r ts status mtime f_name; do
-        [[ "$status" == "*" ]] && continue
-        [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
-        [[ -n "$HISTORY_TO" && "$ts" > "$HISTORY_TO" ]] && continue
-        echo "${ts}|${status}|${mtime}|${f_name}" >> "$tmp_cache"
-    done < "$HISTORY_CACHE_FILE"
-    
-    if [[ ! -s "$tmp_cache" ]]; then
-        echo "No history found for the specified criteria."
-        rm -f "$tmp_cache"
-        return 0
-    fi
+    # Pre-extract FULL backup timestamps via Bash globbing and parameter expansion
+    shopt -s nullglob
+    local full_zips=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
+    shopt -u nullglob
+    local full_ts_str=""
+    for f in "${full_zips[@]}"; do
+        local fname="${f##*/}"
+        local ts="${fname#datezip_}"
+        ts="${ts%_FULL.zip}"
+        full_ts_str+="$ts "
+    done
 
-    local sorted_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-    sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
-    rm -f "$tmp_cache"
-
-    if [[ -n "$HISTORY_LIMIT" ]]; then
-        local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-        head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
-        rm -f "$sorted_cache"
-        sorted_cache="$limited_cache"
-    fi
-
-    if [[ -n "$RESTORE_FILES" ]]; then
-        IFS=',' read -ra target_files <<< "$RESTORE_FILES"
-        for target in "${target_files[@]}"; do
-            echo "---- $target ------"
-            while IFS='|' read -r ts status mtime f_name; do
-                if [[ "$f_name" == "$target" ]]; then
-                    echo "${ts}  ${status}  ${f_name}"
-                fi
-            done < "$sorted_cache"
-            echo ""
-        done
-    else
-        local current_ts=""
-        while IFS='|' read -r ts status mtime f_name; do
-            if [[ "$ts" != "$current_ts" ]]; then
-                [[ -n "$current_ts" ]] && echo ""
-                local b_type="INC"
-                if ls "$BACKUP_DIR_NAME"/datezip_${ts}_*.zip 2>/dev/null | grep -q "_FULL.zip"; then
-                    b_type="FULL"
-                fi
-                echo "---- ${ts} (${b_type}) --------"
-                current_ts="$ts"
-            fi
-            echo "${ts}  ${status}  ${f_name}"
-        done < "$sorted_cache"
-        echo ""
-    fi
-    echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
-    rm -f "$sorted_cache"
+    # Stream history directly into sort -r and awk for O(N) filtering and formatting
+    sort -r -t'|' -k1,1 "$HISTORY_CACHE_FILE" | awk -F'|' \
+        -v h_from="$HISTORY_FROM" \
+        -v h_to="$HISTORY_TO" \
+        -v h_limit="$HISTORY_LIMIT" \
+        -v rest_files="$RESTORE_FILES" \
+        -v full_ts_str="$full_ts_str" '
+    BEGIN {
+        n_full = split(full_ts_str, farr, " ")
+        for (i = 1; i <= n_full; i++) is_full[farr[i]] = 1
+        if (rest_files != "") n_targets = split(rest_files, targets, ",")
+    }
+    $2 == "*" { next }
+    h_from != "" && $1 < h_from { next }
+    h_to != "" && $1 > h_to { next }
+    {
+        if (h_limit != "" && count >= h_limit) exit
+        count++
+        if (rest_files != "") {
+            file_entries[$4, ++file_count[$4]] = $1 "  " $2 "  " $4
+        } else {
+            if ($1 != current_ts) {
+                if (current_ts != "") print ""
+                b_type = ($1 in is_full) ? "FULL" : "INC"
+                print "---- " $1 " (" b_type ") --------"
+                current_ts = $1
+            }
+            print $1 "  " $2 "  " $4
+        }
+    }
+    END {
+        if (count == 0) {
+            print "No history found for the specified criteria."
+        } else if (rest_files != "") {
+            for (i = 1; i <= n_targets; i++) {
+                t = targets[i]
+                print "---- " t " ------"
+                for (j = 1; j <= file_count[t]; j++) {
+                    print file_entries[t, j]
+                }
+                print ""
+            }
+            print "To restore: datezip --restore-time <Timestamp> --files <Filename>"
+        } else {
+            print ""
+            print "To restore: datezip --restore-time <Timestamp> --files <Filename>"
+        }
+    }'
 }
 
 execute_status() {
@@ -626,10 +633,9 @@ execute_list() {
     local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
     [[ ${#backups[@]} -eq 0 ]] && { echo "No backups found."; return 0; }
-    local sorted=()
-    while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
+    # Bash glob expansion is naturally sorted chronologically
     echo "Available backups:"
-    for i in "${!sorted[@]}"; do echo "[$i] $(basename "${sorted[$i]}")"; done
+    for i in "${!backups[@]}"; do echo "[$i] ${backups[$i]##*/}"; done
 }
 
 execute_restore() {
@@ -638,13 +644,15 @@ execute_restore() {
     local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
     [[ ${#backups[@]} -eq 0 ]] && { echo "Error: No backups found." >&2; exit 1; }
-    local sorted=()
-    while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
+    # Bash glob expansion is naturally sorted chronologically
+    local sorted=("${backups[@]}")
     
     local choice="$RESTORE_INDEX"
     if [[ -n "$RESTORE_TIME" ]]; then
         for ((i=${#sorted[@]}-1; i>=0; i--)); do
-            local b_ts=$(basename "${sorted[$i]}" | cut -d'_' -f2,3)
+            local fname="${sorted[$i]##*/}"
+            local b_ts="${fname#datezip_}"
+            b_ts="${b_ts%_*.zip}"
             if [[ "$b_ts" < "$RESTORE_TIME" || "$b_ts" == "$RESTORE_TIME" ]]; then choice=$i; break; fi
         done
         [[ -z "$choice" ]] && { echo "Error: No backup before $RESTORE_TIME" >&2; exit 1; }
@@ -672,7 +680,7 @@ execute_restore() {
         local start_idx=0
         for ((i=choice; i>=0; i--)); do [[ "${sorted[$i]}" == *"_FULL.zip" ]] && { start_idx=$i; break; }; done
         for ((i=start_idx; i<=choice; i++)); do
-            log "Extracting $(basename "${sorted[$i]}")"
+            log "Extracting ${sorted[$i]##*/}"
             local cmd=("unzip" "-o" "-q" "${sorted[$i]}")
             [[ ${#target_files[@]} -gt 0 ]] && cmd+=("${target_files[@]}")
             cmd+=("-d" "$RESTORE_DEST")
@@ -702,14 +710,13 @@ execute_cleanup() {
     local fulls=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
     local incs=("$BACKUP_DIR_NAME"/datezip_*_INC.zip)
     shopt -u nullglob
-    local s_full=()
-    while IFS= read -r line; do s_full+=("$line"); done < <(printf "%s\n" "${fulls[@]}" | sort)
-    local num_f=${#s_full[@]}
+    # Bash glob expansion is naturally sorted chronologically
+    local num_f=${#fulls[@]}
     if [[ $num_f -gt 0 ]]; then
-        local latest="${s_full[$((num_f - 1))]}"
+        local latest="${fulls[$((num_f - 1))]}"
         for inc in "${incs[@]}"; do 
             if [[ "$inc" < "$latest" ]]; then 
-                log "Deleting: $(basename "$inc")"
+                log "Deleting: ${inc##*/}"
                 rm -f -- "$inc"
             fi
         done
@@ -718,13 +725,14 @@ execute_cleanup() {
     local cutoff_date=$(date -v-"${KEEP_DAYS}"d +"%Y%m%d_%H%M%S" 2>/dev/null || date -d "-${KEEP_DAYS} days" +"%Y%m%d_%H%M%S" 2>/dev/null)
     if [[ $cutoff -gt 0 ]]; then
         for (( i=0; i<cutoff; i++ )); do
-            local f="${s_full[$i]}"
-            local f_ts
-            f_ts=$(basename "$f" | cut -d'_' -f2,3)
+            local f="${fulls[$i]}"
+            local fname="${f##*/}"
+            local f_ts="${fname#datezip_}"
+            f_ts="${f_ts%_FULL.zip}"
             # Prune ONLY if it's outside the KEEP_FULL window AND outside the KEEP_DAYS window
             # This implements the "whichever rule yields the larger retention set" logic.
             if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
-                log "Deleting: $(basename "$f")"
+                log "Deleting: ${fname}"
                 rm -f "$f"
             fi
         done
