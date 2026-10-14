@@ -110,7 +110,8 @@ parse_args() {
                 ;;
             --files)
                 RESTORE_FILES="$2"; shift
-                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                # Security: Validate each item in list does not start with a hyphen to prevent option injection
+                [[ "$RESTORE_FILES" =~ (^|,)[[:space:]]*- ]] && { echo "Error: --files items cannot start with a hyphen" >&2; exit 1; }
                 ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
