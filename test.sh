@@ -15,6 +15,10 @@ if ! command -v bats >/dev/null 2>&1; then
     exit 1
 fi
 
+# Ensure we run from the project root regardless of where test.sh is invoked from
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
 # Run all .bats tests in the tests directory
 echo "Running all datezip tests..."
 bats tests/*.bats

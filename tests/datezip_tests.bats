@@ -1,16 +1,31 @@
 #!/usr/bin/env bats
 
 setup() {
-    # Create a temporary workspace
+    # Isolate environment from local computer settings
+    export LC_ALL=C
+    export LANG=C
+    export TZ=UTC
+    export GIT_CONFIG_NOSYSTEM=1
+    export GIT_CONFIG_GLOBAL=/dev/null
+    export GIT_AUTHOR_NAME="Test User"
+    export GIT_AUTHOR_EMAIL="test@example.com"
+    export GIT_COMMITTER_NAME="Test User"
+    export GIT_COMMITTER_EMAIL="test@example.com"
+    umask 022
+
+    # Resolve absolute canonical path to datezip.sh BEFORE changing working directory
+    DATEZIP="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/datezip.sh"
+
+    # Create an isolated temporary workspace
     TEST_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'datezip')
     cd "$TEST_DIR" || exit 1
-    # Path to the datezip.sh script
-    DATEZIP="$BATS_TEST_DIRNAME/../datezip.sh"
     mkdir -p source_dir
     cd source_dir
 }
 
 teardown() {
+    # Step out of TEST_DIR before removing it to avoid directory lock on Windows/MSYS
+    cd "$BATS_TEST_DIRNAME" 2>/dev/null || cd /
     rm -rf "$TEST_DIR"
 }
 

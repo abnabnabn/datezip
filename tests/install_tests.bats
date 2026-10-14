@@ -1,25 +1,35 @@
 #!/usr/bin/env bats
 
 setup() {
-    # Create a temporary workspace for the installation
+    # Isolate environment from local computer settings
+    export LC_ALL=C
+    export LANG=C
+    export TZ=UTC
+    export GIT_CONFIG_NOSYSTEM=1
+    export GIT_CONFIG_GLOBAL=/dev/null
+    umask 022
+
+    # Resolve absolute canonical paths BEFORE changing working directory
+    INSTALL_SCRIPT_SRC="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/install.sh"
+    DATEZIP_SCRIPT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/datezip.sh"
+
+    # Create an isolated temporary workspace for the installation
     TEST_WORKSPACE=$(mktemp -d 2>/dev/null || mktemp -d -t 'datezip')
     INSTALL_DIR="$TEST_WORKSPACE/bin"
     mkdir -p "$INSTALL_DIR"
-    
-    # Path to the scripts
-    INSTALL_SCRIPT_SRC="$BATS_TEST_DIRNAME/../install.sh"
-    DATEZIP_SCRIPT="$BATS_TEST_DIRNAME/../datezip.sh"
-    
+
     # Copy scripts to the workspace
     cp "$INSTALL_SCRIPT_SRC" "$TEST_WORKSPACE/install.sh"
     cp "$DATEZIP_SCRIPT" "$TEST_WORKSPACE/datezip.sh"
     INSTALL_SCRIPT="$TEST_WORKSPACE/install.sh"
     chmod +x "$INSTALL_SCRIPT"
-    
+
     cd "$TEST_WORKSPACE" || exit 1
 }
 
 teardown() {
+    # Step out of workspace before removing it to avoid directory lock on Windows/MSYS
+    cd "$BATS_TEST_DIRNAME" 2>/dev/null || cd /
     rm -rf "$TEST_WORKSPACE"
 }
 
