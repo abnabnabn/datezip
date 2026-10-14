@@ -277,7 +277,13 @@ update_history_cache() {
     shopt -s nullglob
     local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
-    [[ ${#backups[@]} -eq 0 ]] && return 0
+    if [[ ${#backups[@]} -eq 0 ]]; then
+        if [[ -f "$HISTORY_CACHE_FILE" ]]; then
+            log "Notice: Orphaned history detected (archives were deleted). Reindexing..."
+            rm -f "$HISTORY_CACHE_FILE"
+        fi
+        return 0
+    fi
 
     if [[ ! -f "$HISTORY_CACHE_FILE" ]]; then
         execute_reindex

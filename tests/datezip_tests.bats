@@ -497,17 +497,40 @@ teardown() {
 @test "history automatically heals cache when archive is manually deleted" {
     echo "1" > f1.txt
     "$DATEZIP" --full --quiet
+    sleep 1
+    echo "2" > f2.txt
+    "$DATEZIP" --inc --quiet
     "$DATEZIP" --history >/dev/null
     [ -f "backups/.datezip_history" ]
 
-    # Manually remove the disk archive
-    rm -f backups/datezip_*_FULL.zip
+    # Manually remove the incremental archive
+    shopt -s nullglob
+    incs=(backups/datezip_*_INC.zip)
+    shopt -u nullglob
+    rm -f "${incs[0]}"
 
     # History invocation should detect orphaned cache and reindex
     run "$DATEZIP" --history
     [ "$status" -eq 0 ]
     [[ "$output" == *"Orphaned history detected"* ]]
+    [[ "$output" == *"f1.txt"* ]]
+    [[ "$output" != *"f2.txt"* ]]
+}
+
+@test "history detects when all archives are manually deleted" {
+    echo "1" > f1.txt
+    "$DATEZIP" --full --quiet
+    "$DATEZIP" --history >/dev/null
+    [ -f "backups/.datezip_history" ]
+
+    # Manually remove all disk archives
+    rm -f backups/datezip_*.zip
+
+    run "$DATEZIP" --history
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Orphaned history detected"* ]]
     [[ "$output" == *"No history available."* ]]
+    [ ! -f "backups/.datezip_history" ]
 }
 
 @test "cleanup removes increments older than latest full backup" {

@@ -107,11 +107,11 @@ teardown() {
 }
 
 @test "install creates target directory if it does not exist" {
-    NESTED_DIR="$TEST_WORKSPACE/deep/nested/bin"
-    run "$INSTALL_SCRIPT" "$NESTED_DIR"
+    NEW_DIR="$TEST_WORKSPACE/custom_bin"
+    run "$INSTALL_SCRIPT" "$NEW_DIR"
     [ "$status" -eq 0 ]
-    [ -d "$NESTED_DIR" ]
-    [ -x "$NESTED_DIR/datezip" ]
+    [ -d "$NEW_DIR" ]
+    [ -x "$NEW_DIR/datezip" ]
 }
 
 @test "install fails if datezip.sh is missing" {

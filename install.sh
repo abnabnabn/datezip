@@ -87,8 +87,11 @@ if [[ -d "$TARGET_DIR" && ! -w "$TARGET_DIR" ]]; then
     SUDO_CMD="sudo"
     log "Elevated permissions required for $TARGET_DIR. Using sudo..."
 elif [[ ! -d "$TARGET_DIR" ]]; then
-    PARENT_DIR=$(dirname "$TARGET_DIR")
-    if [[ ! -w "$PARENT_DIR" ]]; then
+    check_dir="$TARGET_DIR"
+    while [[ ! -d "$check_dir" && "$check_dir" != "/" && "$check_dir" != "." ]]; do
+        check_dir=$(dirname "$check_dir")
+    done
+    if [[ ! -w "$check_dir" ]]; then
         SUDO_CMD="sudo"
         log "Elevated permissions required to create $TARGET_DIR. Using sudo..."
     fi
