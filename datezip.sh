@@ -110,7 +110,11 @@ parse_args() {
                 ;;
             --files)
                 RESTORE_FILES="$2"; shift
-                [[ "$RESTORE_FILES" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                IFS=',' read -ra _check_files <<< "$RESTORE_FILES"
+                for _f in "${_check_files[@]}"; do
+                    _f_trimmed="${_f#"${_f%%[![:space:]]*}"}"
+                    [[ "$_f_trimmed" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                done
                 ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
@@ -265,7 +269,7 @@ get_latest_backup() {
     local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
     [[ ${#backups[@]} -eq 0 ]] && return 1
-    printf "%s\n" "${backups[@]}" | sort | tail -n 1
+    echo "${backups[${#backups[@]}-1]}"
 }
 
 update_history_cache() {
@@ -315,7 +319,9 @@ update_history_cache() {
         if [[ ${#new_zips[@]} -gt 0 ]]; then
             log "Updating history cache with ${#new_zips[@]} new backup(s)..."
             for zip in "${new_zips[@]}"; do
-                local ts=$(basename "$zip" | cut -d'_' -f2,3)
+                local fname="${zip##*/}"
+                local ts_tmp="${fname#datezip_}"
+                local ts="${ts_tmp%_*.zip}"
                 echo "${ts}|*|00000000.000000|__MARKER__"
                 unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
                 match($0, /[0-9]{8}\.[0-9]{6}/) {
@@ -358,15 +364,14 @@ execute_reindex() {
     touch "$HISTORY_CACHE_FILE"
     
     shopt -s nullglob
-    local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
+    local sorted=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
-    [[ ${#backups[@]} -eq 0 ]] && return 0
-    
-    local sorted=()
-    while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
+    [[ ${#sorted[@]} -eq 0 ]] && return 0
     
     for zip in "${sorted[@]}"; do
-        local ts=$(basename "$zip" | cut -d'_' -f2,3)
+        local fname="${zip##*/}"
+        local ts_tmp="${fname#datezip_}"
+        local ts="${ts_tmp%_*.zip}"
         echo "${ts}|*|00000000.000000|__MARKER__"
         unzip -Z -T "$zip" 2>/dev/null | awk -v zts="$ts" '
         match($0, /[0-9]{8}\.[0-9]{6}/) {
@@ -440,8 +445,7 @@ execute_history() {
         while IFS='|' read -r ts status mtime f_name; do
             if [[ "$ts" != "$current_ts" ]]; then
                 [[ -n "$current_ts" ]] && echo ""
-                local b_type="INC"
-                if ls "$BACKUP_DIR_NAME"/datezip_${ts}_*.zip 2>/dev/null | grep -q "_FULL.zip"; then
+                if [[ -f "$BACKUP_DIR_NAME/datezip_${ts}_FULL.zip" ]]; then
                     b_type="FULL"
                 fi
                 echo "---- ${ts} (${b_type}) --------"
@@ -460,10 +464,16 @@ execute_status() {
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available. Run a backup first."; return 0; }
     
     # Delta from Baseline Model: Find the latest FULL backup timestamp
-    # We grep for _FULL.zip in the backup directory and extract the timestamp
-    local latest_full_ts=$(ls "$BACKUP_DIR_NAME"/datezip_*_FULL.zip 2>/dev/null | tail -n 1 | cut -d'_' -f2,3 | cut -d'.' -f1)
-    
-    if [[ -z "$latest_full_ts" ]]; then
+    shopt -s nullglob
+    local full_backups=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
+    shopt -u nullglob
+    local latest_full_ts=""
+    if [[ ${#full_backups[@]} -gt 0 ]]; then
+        local latest_full="${full_backups[${#full_backups[@]}-1]}"
+        local fname="${latest_full##*/}"
+        local ts_tmp="${fname#datezip_}"
+        latest_full_ts="${ts_tmp%_FULL.zip}"
+    else
         # Fallback to the very first entry if no FULL found (shouldn't happen)
         latest_full_ts=$(head -n 1 "$HISTORY_CACHE_FILE" | cut -d'|' -f1)
     fi
@@ -586,7 +596,9 @@ execute_backup() {
     local b_type="FULL"
     local today=$(date +"%Y%m%d")
     if last_backup=$(get_latest_backup); then
-        local ts_part=$(basename "$last_backup" | cut -d'_' -f2)
+        local fname="${last_backup##*/}"
+        local ts_tmp="${fname#datezip_}"
+        local ts_part="${ts_tmp%%_*}"
         [[ "$ts_part" == "$today" ]] && b_type="INC"
     fi
     [[ -n "$FORCE_TYPE" ]] && b_type="$FORCE_TYPE"
@@ -623,28 +635,26 @@ execute_backup() {
 execute_list() {
     [[ ! -d "$BACKUP_DIR_NAME" ]] && { echo "No backups found."; return 0; }
     shopt -s nullglob
-    local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
+    local sorted=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
-    [[ ${#backups[@]} -eq 0 ]] && { echo "No backups found."; return 0; }
-    local sorted=()
-    while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
+    [[ ${#sorted[@]} -eq 0 ]] && { echo "No backups found."; return 0; }
     echo "Available backups:"
-    for i in "${!sorted[@]}"; do echo "[$i] $(basename "${sorted[$i]}")"; done
+    for i in "${!sorted[@]}"; do echo "[$i] ${sorted[$i]##*/}"; done
 }
 
 execute_restore() {
     [[ ! -d "$BACKUP_DIR_NAME" ]] && { echo "Error: No backups found." >&2; exit 1; }
     shopt -s nullglob
-    local backups=("$BACKUP_DIR_NAME"/datezip_*.zip)
+    local sorted=("$BACKUP_DIR_NAME"/datezip_*.zip)
     shopt -u nullglob
-    [[ ${#backups[@]} -eq 0 ]] && { echo "Error: No backups found." >&2; exit 1; }
-    local sorted=()
-    while IFS= read -r line; do sorted+=("$line"); done < <(printf "%s\n" "${backups[@]}" | sort)
+    [[ ${#sorted[@]} -eq 0 ]] && { echo "Error: No backups found." >&2; exit 1; }
     
     local choice="$RESTORE_INDEX"
     if [[ -n "$RESTORE_TIME" ]]; then
         for ((i=${#sorted[@]}-1; i>=0; i--)); do
-            local b_ts=$(basename "${sorted[$i]}" | cut -d'_' -f2,3)
+            local fname="${sorted[$i]##*/}"
+            local ts_tmp="${fname#datezip_}"
+            local b_ts="${ts_tmp%_*.zip}"
             if [[ "$b_ts" < "$RESTORE_TIME" || "$b_ts" == "$RESTORE_TIME" ]]; then choice=$i; break; fi
         done
         [[ -z "$choice" ]] && { echo "Error: No backup before $RESTORE_TIME" >&2; exit 1; }
@@ -672,7 +682,7 @@ execute_restore() {
         local start_idx=0
         for ((i=choice; i>=0; i--)); do [[ "${sorted[$i]}" == *"_FULL.zip" ]] && { start_idx=$i; break; }; done
         for ((i=start_idx; i<=choice; i++)); do
-            log "Extracting $(basename "${sorted[$i]}")"
+            log "Extracting ${sorted[$i]##*/}"
             local cmd=("unzip" "-o" "-q" "${sorted[$i]}")
             [[ ${#target_files[@]} -gt 0 ]] && cmd+=("${target_files[@]}")
             cmd+=("-d" "$RESTORE_DEST")
@@ -699,17 +709,15 @@ execute_cleanup() {
     [[ ! -d "$BACKUP_DIR_NAME" ]] && return 0
     log "Cleaning up..."
     shopt -s nullglob
-    local fulls=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
+    local s_full=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
     local incs=("$BACKUP_DIR_NAME"/datezip_*_INC.zip)
     shopt -u nullglob
-    local s_full=()
-    while IFS= read -r line; do s_full+=("$line"); done < <(printf "%s\n" "${fulls[@]}" | sort)
     local num_f=${#s_full[@]}
     if [[ $num_f -gt 0 ]]; then
         local latest="${s_full[$((num_f - 1))]}"
         for inc in "${incs[@]}"; do 
             if [[ "$inc" < "$latest" ]]; then 
-                log "Deleting: $(basename "$inc")"
+                log "Deleting: ${inc##*/}"
                 rm -f -- "$inc"
             fi
         done
@@ -719,13 +727,14 @@ execute_cleanup() {
     if [[ $cutoff -gt 0 ]]; then
         for (( i=0; i<cutoff; i++ )); do
             local f="${s_full[$i]}"
-            local f_ts
-            f_ts=$(basename "$f" | cut -d'_' -f2,3)
+            local fname="${f##*/}"
+            local ts_tmp="${fname#datezip_}"
+            local f_ts="${ts_tmp%_FULL.zip}"
             # Prune ONLY if it's outside the KEEP_FULL window AND outside the KEEP_DAYS window
             # This implements the "whichever rule yields the larger retention set" logic.
             if [[ -n $(find "$f" -mtime +"$KEEP_DAYS" 2>/dev/null) ]] && [[ -z "$cutoff_date" || "$f_ts" < "$cutoff_date" ]]; then
-                log "Deleting: $(basename "$f")"
-                rm -f "$f"
+                log "Deleting: $fname"
+                rm -f -- "$f"
             fi
         done
     fi
