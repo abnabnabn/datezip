@@ -96,3 +96,24 @@ teardown() {
     [[ "$output" == *"Error: Target directory cannot start with a hyphen"* ]]
 }
 
+@test "install creates target directory if it does not exist" {
+    NESTED_DIR="$TEST_WORKSPACE/deep/nested/bin"
+    run "$INSTALL_SCRIPT" "$NESTED_DIR"
+    [ "$status" -eq 0 ]
+    [ -d "$NESTED_DIR" ]
+    [ -x "$NESTED_DIR/datezip" ]
+}
+
+@test "install fails if datezip.sh is missing" {
+    rm -f "$TEST_WORKSPACE/datezip.sh"
+    run "$INSTALL_SCRIPT" "$INSTALL_DIR"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Source file 'datezip.sh' not found in current directory."* ]]
+}
+
+@test "install rejects unknown arguments" {
+    run "$INSTALL_SCRIPT" "$INSTALL_DIR" "--extra-arg"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Unknown argument: --extra-arg"* ]]
+}
+

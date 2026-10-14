@@ -450,3 +450,155 @@ teardown() {
     [[ "$output" == *". file with spaces.txt"* ]]
 }
 
+@test "restore multiple comma-separated --files" {
+    echo "f1" > f1.txt
+    echo "f2" > f2.txt
+    echo "f3" > f3.txt
+    "$DATEZIP" --full --quiet
+
+    rm f1.txt f2.txt f3.txt
+    run "$DATEZIP" --restore-index 0 --files "f1.txt,f2.txt" --dest restored --quiet
+    [ "$status" -eq 0 ]
+    [ -f restored/f1.txt ]
+    [ -f restored/f2.txt ]
+    [ ! -f restored/f3.txt ]
+}
+
+@test "incremental backup detects no changes and skips archive creation" {
+    echo "initial" > file1.txt
+    "$DATEZIP" --full --quiet
+
+    # Run incremental without modifying any files
+    run "$DATEZIP" --inc --quiet
+    [ "$status" -eq 0 ]
+
+    # Confirm no incremental archive was created
+    shopt -s nullglob
+    inc_files=(backups/datezip_*_INC.zip)
+    shopt -u nullglob
+    [ ${#inc_files[@]} -eq 0 ]
+}
+
+@test "history automatically heals cache when archive is manually deleted" {
+    echo "1" > f1.txt
+    "$DATEZIP" --full --quiet
+    "$DATEZIP" --history >/dev/null
+    [ -f "backups/.datezip_history" ]
+
+    # Manually remove the disk archive
+    rm -f backups/datezip_*_FULL.zip
+
+    # History invocation should detect orphaned cache and reindex
+    run "$DATEZIP" --history
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Orphaned history detected"* ]]
+    [[ "$output" == *"No history available."* ]]
+}
+
+@test "cleanup removes increments older than latest full backup" {
+    echo "v1" > f1.txt
+    "$DATEZIP" --full --quiet
+    sleep 1
+    echo "v2" > f1.txt
+    "$DATEZIP" --inc --quiet
+    sleep 1
+    echo "v3" > f1.txt
+    "$DATEZIP" --full --quiet
+
+    # Before cleanup: 1 INC exists from prior chain
+    count_inc_before=$(ls backups/datezip_*_INC.zip 2>/dev/null | wc -l)
+    [ "$count_inc_before" -eq 1 ]
+
+    run "$DATEZIP" --cleanup --quiet
+    [ "$status" -eq 0 ]
+
+    # INC is older than the latest FULL, so it must be pruned
+    shopt -s nullglob
+    remaining_incs=(backups/datezip_*_INC.zip)
+    shopt -u nullglob
+    [ ${#remaining_incs[@]} -eq 0 ]
+}
+
+@test "status command ignores files matching gitignore" {
+    git init --quiet
+    echo "*.log" > .gitignore
+    echo "secret/" >> .gitignore
+    mkdir -p secret
+    echo "token" > secret/keys.txt
+    echo "debug" > app.log
+    echo "code" > main.txt
+    "$DATEZIP" --full --quiet
+
+    # Create new untracked files: one tracked-type, two ignored
+    echo "newcode" > other.txt
+    echo "more debug" > error.log
+    echo "secret2" > secret/pass.txt
+
+    run "$DATEZIP" --status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Untracked:"* ]]
+    [[ "$output" == *"? other.txt"* ]]
+    [[ "$output" != *"error.log"* ]]
+    [[ "$output" != *"secret"* ]]
+}
+
+@test "restore fails gracefully when no backups exist" {
+    run "$DATEZIP" --restore-index 0 --dest restored --quiet
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: No backups found."* ]]
+}
+
+@test "list handles empty backups directory gracefully" {
+    run "$DATEZIP" --list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No backups found."* ]]
+}
+
+@test "history and status handle empty workspace gracefully" {
+    run "$DATEZIP" --history
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No history available."* ]]
+
+    run "$DATEZIP" --status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No history available. Run a backup first."* ]]
+}
+
+@test "restore fails with invalid out-of-bounds selection index" {
+    echo "hello" > file1.txt
+    "$DATEZIP" --full --quiet
+
+    run "$DATEZIP" --restore-index 99 --dest restored --quiet
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Invalid selection."* ]]
+}
+
+@test "restore-time fails when no backup matches timestamp" {
+    echo "hello" > file1.txt
+    "$DATEZIP" --full --quiet
+
+    run "$DATEZIP" --restore-time "19990101_000000" --dest restored --quiet
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: No backup before 19990101_000000"* ]]
+}
+
+@test "unknown CLI arguments are rejected" {
+    run "$DATEZIP" --nonexistent-flag
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Unknown parameter: --nonexistent-flag"* ]]
+}
+
+@test "validation rejects invalid limit, from, and to parameters" {
+    run "$DATEZIP" --history --limit "not_a_number"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --limit requires a positive integer"* ]]
+
+    run "$DATEZIP" --history --from "invalid_date"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --from requires YYYYMMDD_HHMMSS format"* ]]
+
+    run "$DATEZIP" --history --to "2024-01-01"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --to requires YYYYMMDD_HHMMSS format"* ]]
+}
+
