@@ -106,15 +106,25 @@ parse_args() {
                 ;;
             --dest)
                 RESTORE_DEST="$2"; shift
-                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                _dest_trimmed="${RESTORE_DEST#"${RESTORE_DEST%%[![:space:]]*}"}"
+                _dest_trimmed="${_dest_trimmed%"${_dest_trimmed##*[![:space:]]}"}"
+                [[ -z "$_dest_trimmed" ]] && { echo "Error: --dest cannot be empty" >&2; exit 1; }
+                [[ "$_dest_trimmed" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                RESTORE_DEST="$_dest_trimmed"
                 ;;
             --files)
                 RESTORE_FILES="$2"; shift
-                IFS=',' read -ra _check_files <<< "$RESTORE_FILES"
-                for _f in "${_check_files[@]}"; do
+                _check_files=()
+                IFS=',' read -ra _raw_files <<< "$RESTORE_FILES"
+                for _f in "${_raw_files[@]}"; do
                     _f_trimmed="${_f#"${_f%%[![:space:]]*}"}"
+                    _f_trimmed="${_f_trimmed%"${_f_trimmed##*[![:space:]]}"}"
+                    [[ -z "$_f_trimmed" ]] && continue
                     [[ "$_f_trimmed" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
+                    _check_files+=("$_f_trimmed")
                 done
+                [[ ${#_check_files[@]} -eq 0 ]] && { echo "Error: --files cannot be empty" >&2; exit 1; }
+                RESTORE_FILES=$(IFS=,; echo "${_check_files[*]}")
                 ;;
             --history) ACTION_HISTORY=true ;;
             --limit)
