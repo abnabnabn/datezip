@@ -621,7 +621,7 @@ execute_backup() {
             rm -f "$exclude_file"
             return 0
         fi
-        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" -- {} +
         status=$?
     else
         zip -r "$dest_path" . -x@"${exclude_file}" -q

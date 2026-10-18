@@ -640,3 +640,19 @@ teardown() {
     [[ "$output" == *"Error: --to requires YYYYMMDD_HHMMSS format"* ]]
 }
 
+@test "incremental backup handles filenames starting with hyphen" {
+    echo "initial" > file1.txt
+    "$DATEZIP" --full --quiet
+
+    sleep 1
+    echo "modified" > file1.txt
+    touch -- "-d"
+
+    run "$DATEZIP" --inc --quiet
+    [ "$status" -eq 0 ]
+
+    inc_files=(backups/datezip_*_INC.zip)
+    [ ${#inc_files[@]} -eq 1 ]
+    run unzip -l "${inc_files[0]}"
+    [[ "$output" == *"-d"* ]]
+}
