@@ -640,3 +640,13 @@ teardown() {
     [[ "$output" == *"Error: --to requires YYYYMMDD_HHMMSS format"* ]]
 }
 
+@test "backup handles filenames starting with hyphen cleanly with option delimiter" {
+    touch -- "-option_file.txt"
+    run "$DATEZIP" --full --quiet
+    [ "$status" -eq 0 ]
+
+    sleep 1
+    echo "update" > -- "-option_file.txt"
+    run "$DATEZIP" --inc --quiet
+    [ "$status" -eq 0 ]
+}

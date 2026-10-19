@@ -618,22 +618,24 @@ execute_backup() {
     if [[ "$b_type" == "INC" && -n "$last_backup" ]]; then
         if [[ -z $(find . -type f -newer "$last_backup" -print 2>/dev/null | head -n 1) ]]; then
             log "No changes detected."
-            rm -f "$exclude_file"
+            rm -f -- "$exclude_file"
             return 0
         fi
-        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
+        # Security: Terminate zip option flags with -- before passing file list
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" -- {} +
         status=$?
     else
-        zip -r "$dest_path" . -x@"${exclude_file}" -q
+        # Security: Terminate zip option flags with -- before target directory
+        zip -r "$dest_path" -x@"${exclude_file}" -q -- .
         status=$?
     fi
-    rm -f "$exclude_file"
+    rm -f -- "$exclude_file"
     
     if [[ $status -eq 0 || $status -eq 12 ]]; then
         log "Backup complete: $filename"
     else
         echo "Error: Backup failed." >&2
-        rm -f "$dest_path"
+        rm -f -- "$dest_path"
         exit 1
     fi
 }
