@@ -410,59 +410,94 @@ execute_history() {
     update_history_cache
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available."; return 0; }
     
-    local tmp_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-    while IFS='|' read -r ts status mtime f_name; do
-        [[ "$status" == "*" ]] && continue
-        [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
-        [[ -n "$HISTORY_TO" && "$ts" > "$HISTORY_TO" ]] && continue
-        echo "${ts}|${status}|${mtime}|${f_name}" >> "$tmp_cache"
-    done < "$HISTORY_CACHE_FILE"
-    
-    if [[ ! -s "$tmp_cache" ]]; then
-        echo "No history found for the specified criteria."
-        rm -f "$tmp_cache"
-        return 0
-    fi
+    # Pre-extract FULL backup timestamps via pure Bash globbing and parameter expansion
+    shopt -s nullglob
+    local full_ts_str=""
+    for f in "$BACKUP_DIR_NAME"/datezip_*_FULL.zip; do
+        local fname="${f##*/}"
+        local ts_tmp="${fname#datezip_}"
+        full_ts_str+="${ts_tmp%_FULL.zip} "
+    done
+    shopt -u nullglob
 
-    local sorted_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-    sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
-    rm -f "$tmp_cache"
+    # Single AWK process: filters, buffers, and formats output in reverse chronological order
+    awk -F'|' \
+        -v h_from="$HISTORY_FROM" \
+        -v h_to="$HISTORY_TO" \
+        -v h_limit="$HISTORY_LIMIT" \
+        -v r_files="$RESTORE_FILES" \
+        -v full_ts_str="$full_ts_str" '
+    BEGIN {
+        split(full_ts_str, full_arr, " ")
+        for (i in full_arr) {
+            if (full_arr[i] != "") is_full[full_arr[i]] = 1
+        }
+        has_r_files = (r_files != "") ? 1 : 0
+        if (has_r_files) {
+            n_targets = split(r_files, targets, ",")
+            for (t = 1; t <= n_targets; t++) {
+                sub(/^[[:space:]]+/, "", targets[t])
+                sub(/[[:space:]]+$/, "", targets[t])
+            }
+        }
+        total_lines = 0
+    }
+    $2 == "*" { next }
+    (h_from != "" && $1 < h_from) { next }
+    (h_to != "" && $1 > h_to) { next }
+    {
+        lines[++total_lines] = $0
+    }
+    END {
+        if (total_lines == 0) {
+            print "No history found for the specified criteria."
+            exit
+        }
 
-    if [[ -n "$HISTORY_LIMIT" ]]; then
-        local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-        head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
-        rm -f "$sorted_cache"
-        sorted_cache="$limited_cache"
-    fi
+        # Apply HISTORY_LIMIT if specified
+        start_idx = total_lines
+        if (h_limit > 0 && h_limit < total_lines) {
+            end_idx = total_lines - h_limit + 1
+        } else {
+            end_idx = 1
+        }
 
-    if [[ -n "$RESTORE_FILES" ]]; then
-        IFS=',' read -ra target_files <<< "$RESTORE_FILES"
-        for target in "${target_files[@]}"; do
-            echo "---- $target ------"
-            while IFS='|' read -r ts status mtime f_name; do
-                if [[ "$f_name" == "$target" ]]; then
-                    echo "${ts}  ${status}  ${f_name}"
-                fi
-            done < "$sorted_cache"
-            echo ""
-        done
-    else
-        local current_ts=""
-        while IFS='|' read -r ts status mtime f_name; do
-            if [[ "$ts" != "$current_ts" ]]; then
-                [[ -n "$current_ts" ]] && echo ""
-                if [[ -f "$BACKUP_DIR_NAME/datezip_${ts}_FULL.zip" ]]; then
-                    b_type="FULL"
-                fi
-                echo "---- ${ts} (${b_type}) --------"
-                current_ts="$ts"
-            fi
-            echo "${ts}  ${status}  ${f_name}"
-        done < "$sorted_cache"
-        echo ""
-    fi
-    echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
-    rm -f "$sorted_cache"
+        if (has_r_files) {
+            for (t = 1; t <= n_targets; t++) {
+                target = targets[t]
+                print "---- " target " ------"
+                for (i = start_idx; i >= end_idx; i--) {
+                    split(lines[i], parts, "|")
+                    ts = parts[1]
+                    status = parts[2]
+                    fname = parts[4]
+                    if (fname == target) {
+                        print ts "  " status "  " fname
+                    }
+                }
+                print ""
+            }
+            print "To restore: datezip --restore-time <Timestamp> --files <Filename>"
+        } else {
+            current_ts = ""
+            for (i = start_idx; i >= end_idx; i--) {
+                split(lines[i], parts, "|")
+                ts = parts[1]
+                status = parts[2]
+                fname = parts[4]
+
+                if (ts != current_ts) {
+                    if (current_ts != "") print ""
+                    b_type = (ts in is_full) ? "FULL" : "INC"
+                    print "---- " ts " (" b_type ") --------"
+                    current_ts = ts
+                }
+                print ts "  " status "  " fname
+            }
+            print ""
+            print "To restore: datezip --restore-time <Timestamp> --files <Filename>"
+        }
+    }' "$HISTORY_CACHE_FILE"
 }
 
 execute_status() {
