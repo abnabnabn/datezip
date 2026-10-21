@@ -420,18 +420,18 @@ execute_history() {
     
     if [[ ! -s "$tmp_cache" ]]; then
         echo "No history found for the specified criteria."
-        rm -f "$tmp_cache"
+        rm -f -- "$tmp_cache"
         return 0
     fi
 
     local sorted_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
     sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
-    rm -f "$tmp_cache"
+    rm -f -- "$tmp_cache"
 
     if [[ -n "$HISTORY_LIMIT" ]]; then
         local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
         head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
-        rm -f "$sorted_cache"
+        rm -f -- "$sorted_cache"
         sorted_cache="$limited_cache"
     fi
 
@@ -462,7 +462,7 @@ execute_history() {
         echo ""
     fi
     echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
-    rm -f "$sorted_cache"
+    rm -f -- "$sorted_cache"
 }
 
 execute_status() {
@@ -590,10 +590,10 @@ execute_status() {
             sed 's/^/  . /' <<< "$modified_files"
         fi
 
-        rm -f "$tmp_stat"
+        rm -f -- "$tmp_stat"
     fi
     
-    rm -f "$tmp_latest" "$tmp_disk"
+    rm -f -- "$tmp_latest" "$tmp_disk"
 }
 
 execute_backup() {
@@ -618,22 +618,23 @@ execute_backup() {
     if [[ "$b_type" == "INC" && -n "$last_backup" ]]; then
         if [[ -z $(find . -type f -newer "$last_backup" -print 2>/dev/null | head -n 1) ]]; then
             log "No changes detected."
-            rm -f "$exclude_file"
+            rm -f -- "$exclude_file"
             return 0
         fi
-        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
+        # Security: Terminate option flags with `--` to prevent option injection when backing up files
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" -- {} +
         status=$?
     else
         zip -r "$dest_path" . -x@"${exclude_file}" -q
         status=$?
     fi
-    rm -f "$exclude_file"
+    rm -f -- "$exclude_file"
     
     if [[ $status -eq 0 || $status -eq 12 ]]; then
         log "Backup complete: $filename"
     else
         echo "Error: Backup failed." >&2
-        rm -f "$dest_path"
+        rm -f -- "$dest_path"
         exit 1
     fi
 }
