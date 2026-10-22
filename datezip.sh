@@ -436,7 +436,13 @@ execute_history() {
     fi
 
     if [[ -n "$RESTORE_FILES" ]]; then
-        IFS=',' read -ra target_files <<< "$RESTORE_FILES"
+        local target_files=()
+        IFS=',' read -ra _raw_files <<< "$RESTORE_FILES"
+        for _f in "${_raw_files[@]}"; do
+            _f_trimmed="${_f#"${_f%%[![:space:]]*}"}"
+            _f_trimmed="${_f_trimmed%"${_f_trimmed##*[![:space:]]}"}"
+            [[ -n "$_f_trimmed" ]] && target_files+=("$_f_trimmed")
+        done
         for target in "${target_files[@]}"; do
             echo "---- $target ------"
             while IFS='|' read -r ts status mtime f_name; do
@@ -621,7 +627,7 @@ execute_backup() {
             rm -f "$exclude_file"
             return 0
         fi
-        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" -- {} +
         status=$?
     else
         zip -r "$dest_path" . -x@"${exclude_file}" -q
@@ -674,7 +680,14 @@ execute_restore() {
     
     local selected="${sorted[$choice]}"
     local target_files=()
-    [[ -n "$RESTORE_FILES" ]] && IFS=',' read -ra target_files <<< "$RESTORE_FILES"
+    if [[ -n "$RESTORE_FILES" ]]; then
+        IFS=',' read -ra _raw_files <<< "$RESTORE_FILES"
+        for _f in "${_raw_files[@]}"; do
+            _f_trimmed="${_f#"${_f%%[![:space:]]*}"}"
+            _f_trimmed="${_f_trimmed%"${_f_trimmed##*[![:space:]]}"}"
+            [[ -n "$_f_trimmed" ]] && target_files+=("$_f_trimmed")
+        done
+    fi
     
     local mode="$RESTORE_TYPE"
     if [[ "$selected" == *"_INC.zip" && -z "$mode" ]]; then

@@ -640,3 +640,23 @@ teardown() {
     [[ "$output" == *"Error: --to requires YYYYMMDD_HHMMSS format"* ]]
 }
 
+@test "restore and history with whitespace in comma-separated --files list" {
+    echo "f1" > f1.txt
+    echo "f2" > f2.txt
+    echo "f3" > f3.txt
+    "$DATEZIP" --full --quiet
+
+    rm f1.txt f2.txt f3.txt
+    # Test restore with whitespace around comma items and empty trailing token
+    run "$DATEZIP" --restore-index 0 --files "f1.txt, f2.txt , " --dest restored --quiet
+    [ "$status" -eq 0 ]
+    [ -f restored/f1.txt ]
+    [ -f restored/f2.txt ]
+    [ ! -f restored/f3.txt ]
+
+    # Test history with whitespace around comma items
+    run "$DATEZIP" --history --files "f1.txt, f2.txt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"---- f1.txt ------"* ]]
+    [[ "$output" == *"---- f2.txt ------"* ]]
+}
