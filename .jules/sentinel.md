@@ -15,3 +15,8 @@ This is the journal of Sentinel, where critical security learnings specific to t
 **Vulnerability:** Option injection in `--files` parameter when passing comma-separated file lists (e.g., `file.txt,-option`). Checking only the start of the full parameter string allowed individual list items starting with hyphens to pass validation and be passed as flags to downstream tools like `unzip`.
 **Learning:** Checking parameter strings for leading hyphens at the top level is insufficient for multi-value inputs (like CSV arguments). Each element must be split and checked individually.
 **Prevention:** Split multi-value arguments on delimiters during option parsing, trim leading whitespace, and iterate through every individual value to verify none start with `-`.
+
+## 2026-10-23 - [Insecure Temporary File Persistence and Subshell Isolation in Signal Traps]
+**Vulnerability:** Temporary files created during `execute_history`, `execute_status`, and `execute_backup` remained uncleaned in `/tmp` if the script exited on error or received a termination signal (SIGINT/SIGTERM/SIGHUP).
+**Learning:** Functions invoked via command substitution (`var=$(func)`) run inside a Bash subshell. Array mutations like `_TMP_FILES+=("$tmp")` inside subshells do not modify variables in the parent process shell, causing signal traps in the parent process to miss tracked temporary files.
+**Prevention:** Use parent-process variable population (e.g. `printf -v "$var_name" "%s" "$tmp"`) rather than command substitution when registering tracked resources for `EXIT`/signal cleanup traps.

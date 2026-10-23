@@ -640,3 +640,14 @@ teardown() {
     [[ "$output" == *"Error: --to requires YYYYMMDD_HHMMSS format"* ]]
 }
 
+@test "temporary files are cleaned up automatically on exit" {
+    echo "test content" > file1.txt
+    "$DATEZIP" --full --quiet
+
+    # Run status command and verify no leftover datezip temp files in /tmp
+    "$DATEZIP" --status >/dev/null
+
+    # Check that no datezip temp files created by test remain in /tmp
+    leftovers=$(find /tmp -maxdepth 1 -name "datezip*" 2>/dev/null | wc -l)
+    [ "$leftovers" -eq 0 ]
+}

@@ -31,6 +31,21 @@ TARGET_DIR="$PWD"
 KEEP_FULL=10
 KEEP_DAYS=14
 
+_TMP_FILES=()
+cleanup_tmp_files() {
+    if [[ ${#_TMP_FILES[@]} -gt 0 ]]; then
+        rm -f -- "${_TMP_FILES[@]}" 2>/dev/null || true
+    fi
+}
+trap cleanup_tmp_files EXIT INT TERM HUP
+
+make_temp() {
+    local __tmp
+    __tmp=$(mktemp /tmp/datezip.XXXXXX 2>/dev/null || mktemp -t 'datezip')
+    [[ -n "$__tmp" ]] && _TMP_FILES+=("$__tmp")
+    printf -v "$1" "%s" "$__tmp"
+}
+
 log() {
     if [[ "$QUIET_MODE" == false ]]; then
         printf "%b\n" "$1"
@@ -410,7 +425,8 @@ execute_history() {
     update_history_cache
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available."; return 0; }
     
-    local tmp_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+    local tmp_cache
+    make_temp tmp_cache
     while IFS='|' read -r ts status mtime f_name; do
         [[ "$status" == "*" ]] && continue
         [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
@@ -420,18 +436,20 @@ execute_history() {
     
     if [[ ! -s "$tmp_cache" ]]; then
         echo "No history found for the specified criteria."
-        rm -f "$tmp_cache"
+        rm -f -- "$tmp_cache"
         return 0
     fi
 
-    local sorted_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+    local sorted_cache
+    make_temp sorted_cache
     sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
-    rm -f "$tmp_cache"
+    rm -f -- "$tmp_cache"
 
     if [[ -n "$HISTORY_LIMIT" ]]; then
-        local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+        local limited_cache
+        make_temp limited_cache
         head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
-        rm -f "$sorted_cache"
+        rm -f -- "$sorted_cache"
         sorted_cache="$limited_cache"
     fi
 
@@ -486,7 +504,8 @@ execute_status() {
     
     log "Comparing against latest FULL backup: $latest_full_ts"
     
-    local tmp_latest=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+    local tmp_latest
+    make_temp tmp_latest
     # Reconstruct state exactly as it was at that FULL backup by scanning history
     awk -F'|' -v target="$latest_full_ts" '
     $1 <= target {
@@ -500,7 +519,8 @@ execute_status() {
         }
     }' "$HISTORY_CACHE_FILE" | sort > "$tmp_latest"
     
-    local tmp_disk=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+    local tmp_disk
+    make_temp tmp_disk
     
     # Gold Standard: Use git if available for 100% accuracy on what should be tracked
     if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -539,7 +559,8 @@ execute_status() {
             is_gnu=true
         fi
 
-        local tmp_stat=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+        local tmp_stat
+        make_temp tmp_stat
 
         # Security: Terminate option flags with `--` to protect against argument injection.
         # Use %n for raw filename across both GNU and BSD stat.
@@ -611,23 +632,24 @@ execute_backup() {
     local filename="datezip_$(date +"$DATE_FORMAT")_${b_type}.zip"
     local dest_path="$BACKUP_DIR_NAME/$filename"
     log "Starting $b_type backup to $filename..."
-    local exclude_file=$(mktemp 2>/dev/null || mktemp -t 'datezip')
+    local exclude_file
+    make_temp exclude_file
     get_zip_excludes > "$exclude_file"
     local status=0
     
     if [[ "$b_type" == "INC" && -n "$last_backup" ]]; then
         if [[ -z $(find . -type f -newer "$last_backup" -print 2>/dev/null | head -n 1) ]]; then
             log "No changes detected."
-            rm -f "$exclude_file"
+            rm -f -- "$exclude_file"
             return 0
         fi
-        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" -- {} +
         status=$?
     else
         zip -r "$dest_path" . -x@"${exclude_file}" -q
         status=$?
     fi
-    rm -f "$exclude_file"
+    rm -f -- "$exclude_file"
     
     if [[ $status -eq 0 || $status -eq 12 ]]; then
         log "Backup complete: $filename"
