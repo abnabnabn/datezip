@@ -290,8 +290,20 @@ update_history_cache() {
         return 0
     fi
 
-    local actual_ts_list=$(printf "%s\n" "${backups[@]}" | awk -F'_' '{print $2"_"$3}' | awk -F'.' '{print $1}' | sort -u)
-    local cached_ts_list=$(awk -F'|' '{print $1}' "$HISTORY_CACHE_FILE" | sort -u)
+    # Performance Optimization: Extract timestamps using pure Bash parameter expansions
+    # and filter cached header markers directly ($2 == "*") with sort -u to avoid scanning every
+    # file record in large history cache files.
+    local raw_actual=""
+    for zip in "${backups[@]}"; do
+        local fname="${zip##*/}"
+        local ts_tmp="${fname#datezip_}"
+        ts_tmp="${ts_tmp%.zip}"
+        ts_tmp="${ts_tmp%_FULL}"
+        ts_tmp="${ts_tmp%_INC}"
+        raw_actual+="${ts_tmp}\n"
+    done
+    local actual_ts_list=$(printf "%b" "$raw_actual" | sort -u)
+    local cached_ts_list=$(awk -F'|' '$2 == "*"{print $1}' "$HISTORY_CACHE_FILE" | sort -u)
 
     if [[ -z "$cached_ts_list" ]]; then
         execute_reindex
