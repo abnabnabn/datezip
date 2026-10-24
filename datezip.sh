@@ -621,7 +621,7 @@ execute_backup() {
             rm -f "$exclude_file"
             return 0
         fi
-        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" -- {} +
         status=$?
     else
         zip -r "$dest_path" . -x@"${exclude_file}" -q
@@ -748,7 +748,7 @@ execute_cleanup() {
 
 main() {
     check_dependencies && parse_args "$@" && resolve_target_directory
-    cd "$TARGET_DIR" || exit 1
+    cd -- "$TARGET_DIR" || exit 1
     if [[ "$ACTION_REINDEX" == true ]]; then execute_reindex
     elif [[ "$ACTION_HISTORY" == true ]]; then execute_history
     elif [[ "$ACTION_LIST" == true ]]; then execute_list
