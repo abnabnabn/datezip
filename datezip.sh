@@ -410,59 +410,94 @@ execute_history() {
     update_history_cache
     [[ ! -s "$HISTORY_CACHE_FILE" ]] && { echo "No history available."; return 0; }
     
-    local tmp_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-    while IFS='|' read -r ts status mtime f_name; do
-        [[ "$status" == "*" ]] && continue
-        [[ -n "$HISTORY_FROM" && "$ts" < "$HISTORY_FROM" ]] && continue
-        [[ -n "$HISTORY_TO" && "$ts" > "$HISTORY_TO" ]] && continue
-        echo "${ts}|${status}|${mtime}|${f_name}" >> "$tmp_cache"
-    done < "$HISTORY_CACHE_FILE"
-    
-    if [[ ! -s "$tmp_cache" ]]; then
-        echo "No history found for the specified criteria."
-        rm -f "$tmp_cache"
-        return 0
-    fi
+    # Pre-extract FULL backup timestamps using pure Bash parameter expansion
+    shopt -s nullglob
+    local full_backups=("$BACKUP_DIR_NAME"/datezip_*_FULL.zip)
+    shopt -u nullglob
+    local full_ts_list=""
+    for fb in "${full_backups[@]}"; do
+        local fname="${fb##*/}"
+        local ts_tmp="${fname#datezip_}"
+        local ts_part="${ts_tmp%_FULL.zip}"
+        full_ts_list="${full_ts_list}${ts_part} "
+    done
 
-    local sorted_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-    sort -r -t'|' -k1,1 "$tmp_cache" > "$sorted_cache"
-    rm -f "$tmp_cache"
+    # High performance single-pass stream sorting and formatting in awk
+    sort -r -t'|' -k1,1 "$HISTORY_CACHE_FILE" | awk -F'|' \
+        -v hfrom="$HISTORY_FROM" \
+        -v hto="$HISTORY_TO" \
+        -v limit="$HISTORY_LIMIT" \
+        -v rfiles="$RESTORE_FILES" \
+        -v full_ts_str="$full_ts_list" '
+    BEGIN {
+        split(full_ts_str, farr, " ")
+        for (i in farr) {
+            if (farr[i] != "") full_ts[farr[i]] = 1
+        }
+        if (rfiles != "") {
+            num_targets = split(rfiles, tarr, ",")
+            for (i = 1; i <= num_targets; i++) {
+                gsub(/^[ \t]+|[ \t]+$/, "", tarr[i])
+                if (tarr[i] != "") {
+                    targets[tarr[i]] = 1
+                    target_order[++num_target_order] = tarr[i]
+                }
+            }
+        }
+        stored_count = 0
+        match_count = 0
+        current_ts = ""
+    }
+    $2 == "*" { next }
+    hfrom != "" && $1 < hfrom { next }
+    hto != "" && $1 > hto { next }
 
-    if [[ -n "$HISTORY_LIMIT" ]]; then
-        local limited_cache=$(mktemp 2>/dev/null || mktemp -t 'datezip')
-        head -n "$HISTORY_LIMIT" "$sorted_cache" > "$limited_cache"
-        rm -f "$sorted_cache"
-        sorted_cache="$limited_cache"
-    fi
+    {
+        if (limit != "" && match_count >= limit) {
+            exit
+        }
+        ts = $1; status = $2; mtime = $3; fname = $4
+        match_count++
 
-    if [[ -n "$RESTORE_FILES" ]]; then
-        IFS=',' read -ra target_files <<< "$RESTORE_FILES"
-        for target in "${target_files[@]}"; do
-            echo "---- $target ------"
-            while IFS='|' read -r ts status mtime f_name; do
-                if [[ "$f_name" == "$target" ]]; then
-                    echo "${ts}  ${status}  ${f_name}"
-                fi
-            done < "$sorted_cache"
-            echo ""
-        done
-    else
-        local current_ts=""
-        while IFS='|' read -r ts status mtime f_name; do
-            if [[ "$ts" != "$current_ts" ]]; then
-                [[ -n "$current_ts" ]] && echo ""
-                if [[ -f "$BACKUP_DIR_NAME/datezip_${ts}_FULL.zip" ]]; then
-                    b_type="FULL"
-                fi
-                echo "---- ${ts} (${b_type}) --------"
-                current_ts="$ts"
-            fi
-            echo "${ts}  ${status}  ${f_name}"
-        done < "$sorted_cache"
-        echo ""
-    fi
-    echo "To restore: datezip --restore-time <Timestamp> --files <Filename>"
-    rm -f "$sorted_cache"
+        if (rfiles != "") {
+            if (fname in targets) {
+                stored_count++
+                rec_ts[stored_count] = ts
+                rec_status[stored_count] = status
+                rec_fname[stored_count] = fname
+            }
+        } else {
+            stored_count++
+            if (ts != current_ts) {
+                if (current_ts != "") print ""
+                btype = (ts in full_ts) ? "FULL" : "INC"
+                printf "---- %s (%s) --------\n", ts, btype
+                current_ts = ts
+            }
+            printf "%s  %s  %s\n", ts, status, fname
+        }
+    }
+    END {
+        if (match_count == 0) {
+            print "No history found for the specified criteria."
+            exit
+        }
+        if (rfiles != "") {
+            for (i = 1; i <= num_target_order; i++) {
+                t = target_order[i]
+                printf "---- %s ------\n", t
+                for (j = 1; j <= stored_count; j++) {
+                    if (rec_fname[j] == t) {
+                        printf "%s  %s  %s\n", rec_ts[j], rec_status[j], rec_fname[j]
+                    }
+                }
+                print ""
+            }
+        } else {
+            print ""
+        }
+        print "To restore: datezip --restore-time <Timestamp> --files <Filename>"
+    }'
 }
 
 execute_status() {
