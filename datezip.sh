@@ -106,7 +106,8 @@ parse_args() {
                 ;;
             --dest)
                 RESTORE_DEST="$2"; shift
-                [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
+                # Security: Validate non-empty destination path that does not start with a hyphen
+                [[ -z "$RESTORE_DEST" || "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest requires a non-empty directory path that does not start with a hyphen" >&2; exit 1; }
                 ;;
             --files)
                 RESTORE_FILES="$2"; shift
@@ -621,7 +622,8 @@ execute_backup() {
             rm -f "$exclude_file"
             return 0
         fi
-        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" {} +
+        # Security: Terminate option flags with `--` before file list expansion `{}`
+        find . -type f -newer "$last_backup" -exec zip "$dest_path" -q -x@"${exclude_file}" -- {} +
         status=$?
     else
         zip -r "$dest_path" . -x@"${exclude_file}" -q

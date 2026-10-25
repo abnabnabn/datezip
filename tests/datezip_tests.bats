@@ -434,7 +434,11 @@ teardown() {
 @test "validation rejects --dest and --files starting with a hyphen" {
     run "$DATEZIP" --restore-index 0 --dest '-bad_dest'
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+    [[ "$output" == *"Error: --dest requires a non-empty directory path"* ]]
+
+    run "$DATEZIP" --restore-index 0 --dest ''
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest requires a non-empty directory path"* ]]
 
     run "$DATEZIP" --restore-index 0 --files '-bad_files'
     [ "$status" -eq 1 ]
@@ -447,6 +451,19 @@ teardown() {
     run "$DATEZIP" --restore-index 0 --files 'file1.txt, -bad_files'
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+}
+
+@test "incremental backup handles hyphenated filenames safely" {
+    echo "initial" > file1.txt
+    "$DATEZIP" --full --quiet
+
+    sleep 1
+    echo "hyphen file" > "-hyphen_file.txt"
+    run "$DATEZIP" --inc --quiet
+    [ "$status" -eq 0 ]
+
+    inc_count=$(ls backups/datezip_*_INC.zip 2>/dev/null | wc -l)
+    [ "$inc_count" -eq 1 ]
 }
 
 @test "status command handles files with special characters and spaces" {
