@@ -9,3 +9,7 @@ This is the performance journal of Bolt, where critical learnings and performanc
 ## 2026-09-18 - Eliminating subshell process forks in backup iteration loops
 **Learning:** Glob expansion of `datezip_YYYYMMDD_HHMMSS_*.zip` in Bash already returns filenames in sorted lexicographical (and thus chronological) order. Piping arrays through subshell loops `< <(printf ... | sort)` or spawning external processes (`basename`, `cut`, `ls`, `grep`) inside loops creates substantial process fork overhead that degrades CLI responsiveness when handling large backup sets.
 **Action:** Use native Bash glob sorting directly (`local sorted=("$BACKUP_DIR_NAME"/datezip_*.zip)`) and pure parameter expansion (`${f##*/}`, `${f#...}`, `${f%...}`) instead of subshell utilities inside loops.
+
+## 2026-10-25 - Streaming history cache entries in AWK
+**Learning:** Sequential `while read` loops in Bash coupled with temporary disk file operations (`mktemp`) and disk checks inside loops degrade `execute_history` performance on large backup histories. Streaming `$HISTORY_CACHE_FILE` through `sort -r` directly into a single AWK process while pre-gathering FULL backup timestamps in Bash via glob expansion yields a ~48x speedup (reducing runtime from ~287ms to ~6ms for 5,000 records).
+**Action:** Replace `while read` loops and disk temporary files in history rendering with a streaming `sort -r | awk` pipeline, using `exit` (rather than non-portable `nextfile`) to terminate AWK input processing upon hitting limit thresholds.
