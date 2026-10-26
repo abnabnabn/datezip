@@ -290,7 +290,17 @@ update_history_cache() {
         return 0
     fi
 
-    local actual_ts_list=$(printf "%s\n" "${backups[@]}" | awk -F'_' '{print $2"_"$3}' | awk -F'.' '{print $1}' | sort -u)
+    # Bolt Optimization: Avoid hardcoded delimiter assumptions on full file paths
+    # which break when parent directories contain underscores. Use pure Bash
+    # basename parameter expansion to extract timestamps safely, then sort -u.
+    local actual_ts_list=""
+    local b fname ts_tmp
+    for b in "${backups[@]}"; do
+        fname="${b##*/}"
+        ts_tmp="${fname#datezip_}"
+        actual_ts_list+="${ts_tmp%_*.zip}"$'\n'
+    done
+    actual_ts_list=$(printf "%s" "$actual_ts_list" | sort -u)
     local cached_ts_list=$(awk -F'|' '{print $1}' "$HISTORY_CACHE_FILE" | sort -u)
 
     if [[ -z "$cached_ts_list" ]]; then
