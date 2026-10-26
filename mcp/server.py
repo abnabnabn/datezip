@@ -125,7 +125,12 @@ async def get_historical_content(timestamp: str, filename: str) -> str:
         if code != 0:
             return f"Error retrieving historical content: {stderr or stdout}"
         
-        target_path = os.path.join(tmp_dir, filename)
+        # Security: Prevent path traversal attacks outside tmp_dir
+        real_tmp_dir = os.path.realpath(tmp_dir)
+        target_path = os.path.realpath(os.path.join(tmp_dir, filename))
+        if not (target_path == real_tmp_dir or target_path.startswith(real_tmp_dir + os.sep)):
+            return f"Error: Invalid filename path traversal detected: '{filename}'"
+
         if os.path.exists(target_path):
             with open(target_path, 'r') as f:
                 return f.read()
