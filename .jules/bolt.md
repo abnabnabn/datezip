@@ -9,3 +9,7 @@ This is the performance journal of Bolt, where critical learnings and performanc
 ## 2026-09-18 - Eliminating subshell process forks in backup iteration loops
 **Learning:** Glob expansion of `datezip_YYYYMMDD_HHMMSS_*.zip` in Bash already returns filenames in sorted lexicographical (and thus chronological) order. Piping arrays through subshell loops `< <(printf ... | sort)` or spawning external processes (`basename`, `cut`, `ls`, `grep`) inside loops creates substantial process fork overhead that degrades CLI responsiveness when handling large backup sets.
 **Action:** Use native Bash glob sorting directly (`local sorted=("$BACKUP_DIR_NAME"/datezip_*.zip)`) and pure parameter expansion (`${f##*/}`, `${f#...}`, `${f%...}`) instead of subshell utilities inside loops.
+
+## 2026-10-26 - Robust parameter expansion for backup timestamp extraction
+**Learning:** Using `awk -F'_'` on full file paths (`printf "%s\n" "${backups[@]}"`) assumes fixed field indices (`$2_$3`) which fails when parent directory paths contain underscores (e.g. `my_project/backups/`). Extracting the filename via pure Bash parameter expansion (`fname="${b##*/}"`) first ensures robust timestamp parsing while avoiding multiple `awk` subshell process forks.
+**Action:** Always strip directory paths with `${b##*/}` before splitting or parsing backup filenames.
