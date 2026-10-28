@@ -434,11 +434,19 @@ teardown() {
 @test "validation rejects --dest and --files starting with a hyphen" {
     run "$DATEZIP" --restore-index 0 --dest '-bad_dest'
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Error: --dest cannot start with a hyphen"* ]]
+    [[ "$output" == *"Error: --dest cannot be empty or start with a hyphen"* ]]
+
+    run "$DATEZIP" --restore-index 0 --dest ''
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot be empty or start with a hyphen"* ]]
 
     run "$DATEZIP" --restore-index 0 --files '-bad_files'
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files '  '
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot be empty"* ]]
 
     run "$DATEZIP" --restore-index 0 --files 'file1.txt,-bad_files'
     [ "$status" -eq 1 ]
@@ -447,6 +455,18 @@ teardown() {
     run "$DATEZIP" --restore-index 0 --files 'file1.txt, -bad_files'
     [ "$status" -eq 1 ]
     [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
+}
+
+@test "restore correctly handles --files with whitespace around commas" {
+    echo "f1" > f1.txt
+    echo "f2" > f2.txt
+    "$DATEZIP" --full --quiet
+
+    rm f1.txt f2.txt
+    run "$DATEZIP" --restore-index 0 --files "f1.txt , f2.txt" --dest restored --quiet
+    [ "$status" -eq 0 ]
+    [ -f restored/f1.txt ]
+    [ -f restored/f2.txt ]
 }
 
 @test "status command handles files with special characters and spaces" {
