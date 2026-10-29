@@ -9,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 # Initialize FastMCP server with a strong system prompt for the agent
 mcp = FastMCP(
     "datezip",
-    description="A local time-machine and state management utility. Use these tools to safely snapshot the workspace before risky operations, audit past changes, and recover lost code."
+    instructions="A local time-machine and state management utility. Use these tools to safely snapshot the workspace before risky operations, audit past changes, and recover lost code."
 )
 
 async def run_datezip(*args: str) -> tuple[int, str, str]:
@@ -125,7 +125,12 @@ async def get_historical_content(timestamp: str, filename: str) -> str:
         if code != 0:
             return f"Error retrieving historical content: {stderr or stdout}"
         
-        target_path = os.path.join(tmp_dir, filename)
+        real_tmp = os.path.realpath(tmp_dir)
+        safe_filename = filename.lstrip('/')
+        target_path = os.path.realpath(os.path.join(real_tmp, safe_filename))
+        if not (target_path == real_tmp or target_path.startswith(real_tmp + os.sep)):
+            return "Error: Invalid filename path (path traversal attempt detected)."
+
         if os.path.exists(target_path):
             with open(target_path, 'r') as f:
                 return f.read()
