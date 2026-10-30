@@ -640,3 +640,18 @@ teardown() {
     [[ "$output" == *"Error: --to requires YYYYMMDD_HHMMSS format"* ]]
 }
 
+@test "incremental backup handles filenames starting with hyphen without option injection" {
+    echo "initial" > file1.txt
+    run "$DATEZIP" --full --quiet
+    [ "$status" -eq 0 ]
+
+    sleep 1
+    # Create a file starting with hyphen that would cause zip option parsing error (e.g. -TT)
+    touch -- "-TT"
+
+    run "$DATEZIP" --inc --quiet
+    [ "$status" -eq 0 ]
+
+    inc_count=$(ls backups/datezip_*_INC.zip | wc -l)
+    [ "$inc_count" -eq 1 ]
+}
