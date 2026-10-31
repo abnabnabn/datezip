@@ -15,3 +15,8 @@ This is the journal of Sentinel, where critical security learnings specific to t
 **Vulnerability:** Option injection in `--files` parameter when passing comma-separated file lists (e.g., `file.txt,-option`). Checking only the start of the full parameter string allowed individual list items starting with hyphens to pass validation and be passed as flags to downstream tools like `unzip`.
 **Learning:** Checking parameter strings for leading hyphens at the top level is insufficient for multi-value inputs (like CSV arguments). Each element must be split and checked individually.
 **Prevention:** Split multi-value arguments on delimiters during option parsing, trim leading whitespace, and iterate through every individual value to verify none start with `-`.
+
+## 2026-10-31 - [Path Traversal in MCP Server get_historical_content]
+**Vulnerability:** Path traversal in `mcp/server.py` `get_historical_content` tool where `os.path.join(tmp_dir, filename)` allowed reading arbitrary files outside the temporary directory when `filename` was an absolute path (e.g. `/etc/passwd`) or relative traversal (e.g. `../../etc/passwd`).
+**Learning:** In Python, `os.path.join(base_dir, user_path)` returns `user_path` directly when `user_path` is an absolute path, discarding `base_dir`. Relative traversals can also escape the target directory.
+**Prevention:** Canonicalize the target path with `os.path.realpath(os.path.join(real_base_dir, user_path))` and verify that `target_path == real_base_dir or target_path.startswith(real_base_dir + os.sep)` before reading or accessing files.
