@@ -9,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 # Initialize FastMCP server with a strong system prompt for the agent
 mcp = FastMCP(
     "datezip",
-    description="A local time-machine and state management utility. Use these tools to safely snapshot the workspace before risky operations, audit past changes, and recover lost code."
+    instructions="A local time-machine and state management utility. Use these tools to safely snapshot the workspace before risky operations, audit past changes, and recover lost code."
 )
 
 async def run_datezip(*args: str) -> tuple[int, str, str]:
@@ -120,14 +120,25 @@ async def get_historical_content(timestamp: str, filename: str) -> str:
     """
     tmp_dir = tempfile.mkdtemp()
     try:
+        # Security: Prevent path traversal and arbitrary host file disclosure.
+        # Ensure target path stays strictly inside the temporary extraction directory.
+        real_tmp_dir = os.path.realpath(tmp_dir)
+        target_path = os.path.realpath(os.path.join(tmp_dir, filename))
+        if target_path == real_tmp_dir or not target_path.startswith(real_tmp_dir + os.sep):
+            return f"Error: Invalid or traversing file path '{filename}'."
+
         args = ["--restore-time", timestamp, "--files", filename, "--dest", tmp_dir, "--restore-type", "e"]
         code, stdout, stderr = await run_datezip(*args)
         if code != 0:
             return f"Error retrieving historical content: {stderr or stdout}"
         
-        target_path = os.path.join(tmp_dir, filename)
-        if os.path.exists(target_path):
-            with open(target_path, 'r') as f:
+        # Verify post-extraction canonical target to protect against symlink traversal
+        real_target = os.path.realpath(target_path)
+        if real_target == real_tmp_dir or not real_target.startswith(real_tmp_dir + os.sep):
+            return f"Error: Invalid or traversing file path '{filename}'."
+
+        if os.path.isfile(real_target):
+            with open(real_target, 'r') as f:
                 return f.read()
         else:
             return f"Error: File '{filename}' not found in archive at timestamp {timestamp}."
