@@ -449,6 +449,32 @@ teardown() {
     [[ "$output" == *"Error: --files cannot start with a hyphen"* ]]
 }
 
+@test "validation rejects empty --dest and empty --files entries" {
+    run "$DATEZIP" --restore-index 0 --dest ''
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot be empty"* ]]
+
+    run "$DATEZIP" --restore-index 0 --dest '   '
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --dest cannot be empty"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files ''
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot be empty"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files '   '
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files cannot be empty"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files 'f1.txt,,f2.txt'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files contains an empty file entry"* ]]
+
+    run "$DATEZIP" --restore-index 0 --files 'f1.txt,   '
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: --files contains an empty file entry"* ]]
+}
+
 @test "status command handles files with special characters and spaces" {
     echo "content1" > "file [1].txt"
     echo "content2" > "file with spaces.txt"
