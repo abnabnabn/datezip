@@ -15,3 +15,8 @@ This is the journal of Sentinel, where critical security learnings specific to t
 **Vulnerability:** Option injection in `--files` parameter when passing comma-separated file lists (e.g., `file.txt,-option`). Checking only the start of the full parameter string allowed individual list items starting with hyphens to pass validation and be passed as flags to downstream tools like `unzip`.
 **Learning:** Checking parameter strings for leading hyphens at the top level is insufficient for multi-value inputs (like CSV arguments). Each element must be split and checked individually.
 **Prevention:** Split multi-value arguments on delimiters during option parsing, trim leading whitespace, and iterate through every individual value to verify none start with `-`.
+
+## 2026-11-04 - [Directory Fallback and CWD Overwrite via Empty or Whitespace Path Parameters]
+**Vulnerability:** Unchecked empty or whitespace-only paths passed to `--dest`, `--files`, or `install.sh` target directories. Passing an empty string `-d ""` to Info-ZIP `unzip` causes it to fall back to extracting into the current working directory, potentially overwriting workspace files. Additionally, `install.sh` accepted whitespace-only target directories, creating directories composed of spaces and polluting filesystems.
+**Learning:** Checking solely that parameters don't start with a hyphen (`-`) allows empty strings and whitespace strings to slip through. Downstream CLI tools often treat empty destination options as no-ops or fall back silently to current directory extraction.
+**Prevention:** Strip all whitespace using parameter expansion `${param//[[:space:]]/}` and assert that path and filename arguments contain at least one non-whitespace character before accepting them.

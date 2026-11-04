@@ -106,6 +106,12 @@ teardown() {
     [[ "$output" == *"Error: Target directory cannot start with a hyphen"* ]]
 }
 
+@test "install rejects empty or whitespace-only target directory" {
+    run "$INSTALL_SCRIPT" "   "
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: Target directory cannot be empty"* ]]
+}
+
 @test "install creates target directory if it does not exist" {
     NEW_DIR="$TEST_WORKSPACE/custom_bin"
     run "$INSTALL_SCRIPT" "$NEW_DIR"
