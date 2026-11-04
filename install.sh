@@ -56,6 +56,9 @@ while [[ "$#" -gt 0 ]]; do
         *) 
             if [[ -z "$TARGET_DIR" ]]; then
                 TARGET_DIR="$1"
+                if [[ -z "${TARGET_DIR//[[:space:]]/}" ]]; then
+                    error_exit "Target directory cannot be empty"
+                fi
                 if [[ "$TARGET_DIR" =~ ^- ]]; then
                     error_exit "Target directory cannot start with a hyphen"
                 fi
