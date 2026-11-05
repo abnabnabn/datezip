@@ -118,14 +118,22 @@ async def get_historical_content(timestamp: str, filename: str) -> str:
         timestamp: The EXACT timestamp retrieved from `get_history` (e.g., "20240216_143000").
         filename: The specific file to read (e.g., "src/main.py").
     """
+    # Security: Validate filename to prevent option injection and path traversal
+    if not filename or filename.startswith("-"):
+        return f"Error: Invalid filename '{filename}'."
+
     tmp_dir = tempfile.mkdtemp()
     try:
+        real_tmp_dir = os.path.realpath(tmp_dir)
+        target_path = os.path.realpath(os.path.join(real_tmp_dir, filename))
+        if target_path != real_tmp_dir and not target_path.startswith(real_tmp_dir + os.sep):
+            return f"Error: Path traversal detected in filename '{filename}'."
+
         args = ["--restore-time", timestamp, "--files", filename, "--dest", tmp_dir, "--restore-type", "e"]
         code, stdout, stderr = await run_datezip(*args)
         if code != 0:
             return f"Error retrieving historical content: {stderr or stdout}"
         
-        target_path = os.path.join(tmp_dir, filename)
         if os.path.exists(target_path):
             with open(target_path, 'r') as f:
                 return f.read()
