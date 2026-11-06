@@ -15,3 +15,8 @@ This is the journal of Sentinel, where critical security learnings specific to t
 **Vulnerability:** Option injection in `--files` parameter when passing comma-separated file lists (e.g., `file.txt,-option`). Checking only the start of the full parameter string allowed individual list items starting with hyphens to pass validation and be passed as flags to downstream tools like `unzip`.
 **Learning:** Checking parameter strings for leading hyphens at the top level is insufficient for multi-value inputs (like CSV arguments). Each element must be split and checked individually.
 **Prevention:** Split multi-value arguments on delimiters during option parsing, trim leading whitespace, and iterate through every individual value to verify none start with `-`.
+
+## 2026-07-23 - [Empty Input Handling and Unintended Fallback in Unzip Restorations]
+**Vulnerability:** Empty or whitespace-only inputs for `--dest` and `--files` CLI arguments allowed passing empty arguments down to `unzip` (e.g. `-d ""`), causing Info-ZIP `unzip` to fall back to extracting into the current working directory, potentially overwriting workspace files unexpectedly.
+**Learning:** Checking for hyphen prefix alone does not protect against empty or all-whitespace strings passed to CLI flags. Downstream utilities often exhibit hazardous default behaviors (such as extracting to `.` or parsing subsequent arguments as file targets) when receiving empty string options.
+**Prevention:** Always validate that required arguments or list elements are neither empty nor composed solely of whitespace (e.g., `[[ -z "${PARAM//[[:space:]]/}" ]]`) before continuing execution.

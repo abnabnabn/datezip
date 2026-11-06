@@ -106,13 +106,18 @@ parse_args() {
                 ;;
             --dest)
                 RESTORE_DEST="$2"; shift
+                # Security: Validate dest is neither empty nor option-injected to avoid falling back to PWD
+                [[ -z "${RESTORE_DEST//[[:space:]]/}" ]] && { echo "Error: --dest cannot be empty" >&2; exit 1; }
                 [[ "$RESTORE_DEST" =~ ^- ]] && { echo "Error: --dest cannot start with a hyphen" >&2; exit 1; }
                 ;;
             --files)
                 RESTORE_FILES="$2"; shift
+                # Security: Validate files list and entries are neither empty nor option-injected
+                [[ -z "${RESTORE_FILES//[[:space:]]/}" ]] && { echo "Error: --files cannot be empty" >&2; exit 1; }
                 IFS=',' read -ra _check_files <<< "$RESTORE_FILES"
                 for _f in "${_check_files[@]}"; do
                     _f_trimmed="${_f#"${_f%%[![:space:]]*}"}"
+                    [[ -z "$_f_trimmed" ]] && { echo "Error: --files cannot contain empty filename" >&2; exit 1; }
                     [[ "$_f_trimmed" =~ ^- ]] && { echo "Error: --files cannot start with a hyphen" >&2; exit 1; }
                 done
                 ;;
