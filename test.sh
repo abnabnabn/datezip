@@ -22,3 +22,9 @@ cd "$SCRIPT_DIR" || exit 1
 # Run all .bats tests in the tests directory
 echo "Running all datezip tests..."
 bats tests/*.bats
+
+# Run python unit tests if python3 is available
+if command -v python3 >/dev/null 2>&1; then
+    echo "Running Python unit tests..."
+    python3 -B -m unittest discover -s tests -p "test_*.py"
+fi

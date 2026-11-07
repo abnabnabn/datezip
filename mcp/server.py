@@ -120,14 +120,27 @@ async def get_historical_content(timestamp: str, filename: str) -> str:
     """
     tmp_dir = tempfile.mkdtemp()
     try:
+        # Security: Prevent path traversal escaping tmp_dir (e.g. absolute paths or relative ../)
+        if os.path.isabs(filename):
+            return f"Error: Invalid or unsafe filename '{filename}'."
+
+        real_tmp_dir = os.path.realpath(tmp_dir)
+        target_path = os.path.realpath(os.path.join(real_tmp_dir, filename))
+        if target_path != real_tmp_dir and not target_path.startswith(real_tmp_dir + os.sep):
+            return f"Error: Invalid or unsafe filename '{filename}'."
+
         args = ["--restore-time", timestamp, "--files", filename, "--dest", tmp_dir, "--restore-type", "e"]
         code, stdout, stderr = await run_datezip(*args)
         if code != 0:
             return f"Error retrieving historical content: {stderr or stdout}"
         
-        target_path = os.path.join(tmp_dir, filename)
-        if os.path.exists(target_path):
-            with open(target_path, 'r') as f:
+        # Security: Re-verify canonical target path after extraction against symlink traversal
+        canonical_target = os.path.realpath(target_path)
+        if canonical_target != real_tmp_dir and not canonical_target.startswith(real_tmp_dir + os.sep):
+            return f"Error: Invalid or unsafe filename '{filename}'."
+
+        if os.path.exists(canonical_target):
+            with open(canonical_target, 'r') as f:
                 return f.read()
         else:
             return f"Error: File '{filename}' not found in archive at timestamp {timestamp}."
